@@ -1,0 +1,15 @@
+[project]
+name = "arthur"
+version = "0.1.0"
+description = "The merklin client for tamper proof logging"
+readme = "README.md"
+authors = [
+    { name = "Narendra S", email = "narendra.s1232@gmail.com" },
+    { name = "Ajeetha J", email = "ajeethaofficial@gmail.com" },
+]
+requires-python = ">=3.13"
+dependencies = ["httpx>=0.28.1", "websockets>=15.0.1"]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
