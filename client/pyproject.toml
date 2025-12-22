@@ -12,6 +12,7 @@ dependencies = [
     "cryptography>=46.0.3",
     "httpx>=0.28.1",
     "merkle-tree",
+    "python-dotenv>=1.2.1",
     "websockets>=15.0.1",
 ]
 
