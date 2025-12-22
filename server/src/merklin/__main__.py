@@ -68,26 +68,36 @@ async def log_ws_endpoint(websocket: WebSocket, token: str = Depends(verify_toke
     finally:
         conn_manager.remove_connection(token)
         challenger.cancel()
+        try:
+            await challenger
+        except asyncio.CancelledError:
+            pass
 
 
 async def challenge_subroutine(websocket: WebSocket):
-    while True:
-        await asyncio.sleep(random.randrange(600, 1200))
-        challenge_type = random.choice(["membership", "consistency"])
-        challenge: dict[str, int | str]
-        if challenge_type == "membership":
-            # Dummy challenge for membership proof - implement random log selection
-            challenge = {
-                "type": "challenge",
-                "challenge_type": "membership",
-                "log_index": 1,
-            }
-        else:
-            # Dummy challenge for consistency proof - implement random tree size selection
-            challenge = {
-                "type": "challenge",
-                "challenge_type": "consistency",
-                "previous_size": 1,
-                "current_size": 2,
-            }
-        await websocket.send_json(challenge)
+    try:
+        while True:
+            await asyncio.sleep(random.randrange(600, 1200))
+            challenge_type = random.choice(["membership", "consistency"])
+            challenge: dict[str, int | str]
+            if challenge_type == "membership":
+                # Dummy challenge for membership proof - implement random log selection
+                challenge = {
+                    "type": "challenge",
+                    "challenge_type": "membership",
+                    "log_index": 1,
+                }
+            else:
+                # Dummy challenge for consistency proof - implement random tree size selection
+                challenge = {
+                    "type": "challenge",
+                    "challenge_type": "consistency",
+                    "previous_size": 1,
+                    "current_size": 2,
+                }
+            try:
+                await websocket.send_json(challenge)
+            except (WebSocketDisconnect, WebSocketException):
+                break
+    except asyncio.CancelledError:
+        pass
