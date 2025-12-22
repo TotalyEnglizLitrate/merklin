@@ -1,49 +1,100 @@
 import asyncio
 import json
-import websockets
 import os
+import sys
+import threading
 from asyncio import Queue
+from typing import Callable, Coroutine, Literal
+
+import websockets
 
 
-def hook_logs(ws_url=None):
-    queue: Queue = Queue(maxsize=1)
+class HookLogs:
+    def __init__(
+        self,
+        hook: Callable[[str], Coroutine[None, None, None]],
+        loop: asyncio.AbstractEventLoop,
+        capture: Literal["stdout", "stderr"] = "stdout",
+    ) -> None:
+        self.capture = capture
+        self.loop = loop
+        self.on_write = hook
+        self.original_stream = sys.stdout if capture == "stdout" else sys.stderr
 
-    ws_url = os.getenv("LOGGER_WS_URL")
+    def hook(self) -> None:
+        original = self.original_stream
+        loop = self.loop
+        on_write = self.on_write
 
+        class AsyncCapture:
+            def write(self, data: str) -> int:
+                asyncio.run_coroutine_threadsafe(on_write(data), loop)
+                return original.write(data)
+
+            def flush(self):
+                return original.flush()
+
+            def __getattr__(self, name: str):
+                return getattr(original, name)
+
+        if self.capture == "stdout":
+            sys.stdout = AsyncCapture()
+        else:
+            sys.stderr = AsyncCapture()
+
+    def unhook(self) -> None:
+        if self.capture == "stdout":
+            sys.stdout = self.original_stream
+        else:
+            sys.stderr = self.original_stream
+
+
+def hook_logs(
+    capture: Literal["stdout", "stderr"] = "stdout",
+) -> None:
+    ws_url = os.getenv("MERKLIN_URL")
     if ws_url is None:
-        raise RuntimeError("WebSocket endpoint not configured")
+        raise RuntimeError("Merklin server endpoint not configured")
 
-    asyncio.create_task(process_logs(queue))
-    asyncio.create_task(send_logs(queue, ws_url))
+    loop = asyncio.new_event_loop()
+    queue: Queue[str] = Queue(maxsize=1)
+
+    async def on_write(data: str) -> None:
+        await queue.put(data)
+
+    hook = HookLogs(on_write, loop, capture)
+    hook.hook()
+
+    def run_loop() -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(send_logs(queue, ws_url, hook))
+
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
 
 
-async def process_logs(queue: Queue):
-    while True:
-        log = None
-        # TODO: grab logs
+async def send_logs(
+    queue: Queue[str],
+    ws_url: str,
+    hook: HookLogs,
+) -> None:
+    listener: asyncio.Task[None] | None = None
 
-        # TODO: put logs into Queue
-        await queue.put(log)
-
-
-async def send_logs(queue: Queue, ws_url):
     try:
-        async with websockets.connect(ws_url) as websocket:
-
-            asyncio.create_task(handle_challenge(websocket))
+        async with websockets.connect(f"{ws_url}/log") as websocket:
+            listener = asyncio.create_task(handle_challenge(websocket))
 
             while True:
                 log_entry = await queue.get()
 
-                try:
-                    message = {"type": "log", "data": log_entry}
+                # TODO: encrypt and sign the log entry
+                message = {
+                    "type": "log",
+                    "data": log_entry,
+                    "signature": log_entry,
+                }
 
-                    await websocket.send(json.dumps(message))
-
-                except (TypeError, ValueError):
-                    # JSON serialization failed
-                    # TODO: decide policy (drop / halt / alert)
-                    break
+                await websocket.send(json.dumps(message))
 
     except websockets.exceptions.ConnectionClosed:
         # WebSocket closed by server or network
@@ -54,16 +105,25 @@ async def send_logs(queue: Queue, ws_url):
         # Task was cancelled during shutdown
         raise
 
-    except Exception as e:
+    except Exception:
         # Any unexpected failure
         # TODO: escalate
         pass
 
+    finally:
+        if listener:
+            listener.cancel()
+        hook.unhook()
 
-async def handle_challenge(websocket):
+
+async def handle_challenge(websocket: websockets.ClientConnection) -> None:
     async for message in websocket:
+        data = json.loads(message)
 
-        # TODO: listen for challange
+        if data.get("type") == "error":
+            # TODO: handle error
+            pass
 
-        # TODO: generate proof and send to server
-        pass
+        elif data.get("type") == "challenge":
+            # TODO: generate proof and send to server
+            pass
