@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 import urllib.parse
 import websockets
+from merkle_tree import MerkleTree
 
 
 class HookLogs:
@@ -110,7 +111,8 @@ async def send_logs(
 
     try:
         async with websockets.connect(f"{complete_url}/log") as websocket:
-            listener = asyncio.create_task(handle_challenge(websocket))
+            Mtree = MerkleTree()
+            listener = asyncio.create_task(handle_challenge(websocket, Mtree))
 
             while True:
                 # Check if shutdown was requested
@@ -143,7 +145,7 @@ async def send_logs(
                     "data": enc_log.hex(),
                     "signature": signature.hex(),
                 }
-
+                Mtree.add_log(enc_log.hex())
                 await websocket.send(json.dumps(message))
 
     except websockets.exceptions.ConnectionClosed:
@@ -166,7 +168,9 @@ async def send_logs(
         hook.unhook()
 
 
-async def handle_challenge(websocket: websockets.ClientConnection) -> None:
+async def handle_challenge(
+    websocket: websockets.ClientConnection, mtree: MerkleTree
+) -> None:
     async for message in websocket:
         data = json.loads(message)
 
@@ -175,5 +179,27 @@ async def handle_challenge(websocket: websockets.ClientConnection) -> None:
             pass
 
         elif data.get("type") == "challenge":
-            # TODO: generate proof and send to server
-            pass
+            try:
+                if data.get("challenge_type") == "membership":
+                    index = data.get("log_index")
+                    member = mtree.membership_proof(index)
+                    proof = {
+                        "type": "proof",
+                        "proof_type": "membership",
+                        "proof": member,
+                        "indices": [index],
+                    }
+                elif data.get("challenge_type") == "consistency":
+                    point1 = data.get("previous_size")
+                    point2 = data.get("current_size")
+                    consistent = mtree.consistency_proof(point1, point2)
+                    proof = {
+                        "type": "proof",
+                        "proof_type": "consistency",
+                        "proof": consistent,
+                        "indices": [point1, point2],
+                    }
+            except Exception as e:
+                proof = {"type": "error", "description": f"{e}"}
+            finally:
+                await websocket.send(json.dumps(proof))
