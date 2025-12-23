@@ -17,17 +17,12 @@ class MerkleTree:
         node = LogNode(log)
         self.leaves.append(node)
 
-    def membership_proof(self, log: str) -> list[str]:
-        # retun membership proof with 0th idx as reqd hash
-        leaf_hash = sha256(log.encode()).hexdigest()
-        try:
-            index = next(
-                i for i, node in enumerate(self.leaves) if node.log == leaf_hash
-            )
-        except StopIteration:
-            raise ValueError("Log not found in tree")
-
-        proof = []
+    def membership_proof(self, log_idx: int) -> list[str]:
+        if not (0 < log_idx <= len(self.leaves)):
+            raise ValueError("Invalid tree sizes for consistency proof")
+        
+        index = log_idx
+        proof = [self.leaves[index]]
         current_level = [node.log for node in self.leaves]
         n = len(current_level)
         while n > 1:
@@ -48,7 +43,7 @@ class MerkleTree:
             n = len(current_level)
 
         self.root = current_level[0]
-        return [leaf_hash] + proof
+        return proof
 
     def consistency_proof(
         self, point1: int, point2: int
