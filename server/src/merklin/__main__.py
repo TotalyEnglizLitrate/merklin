@@ -1,3 +1,8 @@
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+import cryptography.exceptions
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
 from merkle_tree import MerkleTree
 
@@ -5,29 +10,29 @@ import asyncio
 import json
 import random
 
+from dataclasses import dataclass
+from typing import cast
+
+@dataclass
+class Connection:
+    websocket: WebSocket
+    tree: MerkleTree
+    public_key: rsa.RSAPublicKey
+
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[str, tuple[WebSocket, MerkleTree]] = {}
+        self.active_connections: dict[str, Connection] = {}
 
-    def add_connection(self, token: str, websocket: WebSocket) -> None:
+    def add_connection(
+        self, websocket: WebSocket, token: str, public_key: rsa.RSAPublicKey
+    ) -> Connection:
         # TODO: Check if the logger is registered
-        self.active_connections[token] = (websocket, MerkleTree())
+        self.active_connections[token] = Connection(websocket, MerkleTree(), public_key)
+        return self.active_connections[token]
 
     def remove_connection(self, token: str) -> None:
         self.active_connections.pop(token, None)
-
-    def get_tree(self, token: str) -> MerkleTree | None:
-        connection = self.active_connections.get(token)
-        if connection:
-            return connection[1]
-        return None
-
-    def get_websocket(self, token: str) -> WebSocket | None:
-        connection = self.active_connections.get(token)
-        if connection:
-            return connection[0]
-        return None
 
     def is_connected(self, token: str) -> bool:
         return token in self.active_connections
@@ -43,17 +48,32 @@ async def verify_token(websocket: WebSocket) -> str:
 
 
 @app.websocket("/log")
-async def log_ws_endpoint(websocket: WebSocket, token: str = Depends(verify_token)):
+async def log_ws_endpoint(
+    websocket: WebSocket, public_key: str, token: str = Depends(verify_token)
+):
     await websocket.accept()
     challenger = asyncio.create_task(challenge_subroutine(websocket))
-    conn_manager = websocket.app.connection_manager
-    conn_manager.add_connection(token, websocket)
+    conn_manager: ConnectionManager = websocket.app.connection_manager
+    connection = conn_manager.add_connection(
+        websocket,
+        token,
+        cast(
+            rsa.RSAPublicKey,
+            serialization.load_pem_public_key(bytes.fromhex(public_key)),
+        ),
+    )
     try:
         async for message in websocket.iter_json():
             msg_type = message.get("type")
             if msg_type == "log":
-                # TODO: Handle log message
-                ...
+                data = message.get("log")
+                signature = message.get("signature")
+                if data is None or signature is None:
+                    await websocket.send_json(
+                        {"error": "Missing log data or signature"}
+                    )
+                    continue
+                process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
             elif msg_type == "proof":
                 # TODO: verify outstanding proof
                 ...
@@ -65,6 +85,8 @@ async def log_ws_endpoint(websocket: WebSocket, token: str = Depends(verify_toke
         print(f"WebSocket error: {e}")
     except json.JSONDecodeError:
         await websocket.send_json({"error": "Invalid JSON format"})
+    except cryptography.exceptions.InvalidSignature:
+        await websocket.send_json({"error": "Invalid log signature"})
     finally:
         conn_manager.remove_connection(token)
         challenger.cancel()
@@ -72,6 +94,20 @@ async def log_ws_endpoint(websocket: WebSocket, token: str = Depends(verify_toke
             await challenger
         except asyncio.CancelledError:
             pass
+
+
+def process_log(data: bytes, signature: bytes, conn: Connection) -> None:
+    conn.public_key.verify(
+        signature,
+        data,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+
+    conn.tree.add_log(data.hex())
 
 
 async def challenge_subroutine(websocket: WebSocket):
