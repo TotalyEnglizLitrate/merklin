@@ -87,6 +87,8 @@ async def log_ws_endpoint(
         await websocket.send_json({"error": "Invalid JSON format"})
     except cryptography.exceptions.InvalidSignature:
         await websocket.send_json({"error": "Invalid log signature"})
+    except Exception as e:
+        await websocket.send_json({"error": f"Internal server error: {e}"})
     finally:
         conn_manager.remove_connection(token)
         challenger.cancel()
