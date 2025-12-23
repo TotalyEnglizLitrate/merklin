@@ -5,7 +5,10 @@ import sys
 import threading
 from asyncio import Queue
 from typing import Callable, Coroutine, Literal
-
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+import urllib.parse
 import websockets
 
 
@@ -86,10 +89,27 @@ async def send_logs(
     hook: HookLogs,
     shutdown_event: asyncio.Event,
 ) -> None:
+
+    aes_key = AESGCM.generate_key(bit_length=256)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    public_key = private_key.public_key()
+
+    pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    base_url = f"{ws_url}/log"
+    query_params = {"token": "firebase jwt", "public_key": pem.hex()}
+    encoded_params = urllib.parse.urlencode(query_params)
+    complete_url = f"{base_url}?{encoded_params}"
+
     listener: asyncio.Task[None] | None = None
 
     try:
-        async with websockets.connect(f"{ws_url}/log") as websocket:
+        async with websockets.connect(f"{complete_url}/log") as websocket:
             listener = asyncio.create_task(handle_challenge(websocket))
 
             while True:
@@ -103,11 +123,25 @@ async def send_logs(
                 except asyncio.TimeoutError:
                     continue
 
-                # TODO: encrypt and sign the log entry
+                # AES Encryption
+                aes = AESGCM(aes_key)
+                nonce = os.urandom(12)
+                enc_log = aes.encrypt(nonce, log_entry.encode(), None)
+
+                # signature
+                signature = private_key.sign(
+                    enc_log,
+                    padding.PSS(
+                        mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=padding.PSS.MAX_LENGTH,
+                    ),
+                    hashes.SHA256(),
+                )
+
                 message = {
                     "type": "log",
-                    "data": log_entry,
-                    "signature": log_entry,
+                    "data": enc_log.hex(),
+                    "signature": signature.hex(),
                 }
 
                 await websocket.send(json.dumps(message))
