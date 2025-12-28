@@ -4,8 +4,8 @@ import math
 
 
 class LogNode:
-    def __init__(self, log: str) -> None:
-        self.log = sha256(log.encode()).hexdigest()
+    def __init__(self, log: bytes) -> None:
+        self.log = sha256(log).hexdigest()
 
 
 class MerkleTree:
@@ -13,21 +13,16 @@ class MerkleTree:
         self.leaves: list[LogNode] = []
         self.root: str | None = None
 
-    def add_log(self, log: str) -> None:
+    def add_log(self, log: bytes) -> None:
         node = LogNode(log)
         self.leaves.append(node)
 
-    def membership_proof(self, log: str) -> list[str]:
-        # retun membership proof with 0th idx as reqd hash
-        leaf_hash = sha256(log.encode()).hexdigest()
-        try:
-            index = next(
-                i for i, node in enumerate(self.leaves) if node.log == leaf_hash
-            )
-        except StopIteration:
-            raise ValueError("Log not found in tree")
-
-        proof = []
+    def membership_proof(self, log_idx: int) -> list[str]:
+        if not (0 < log_idx <= len(self.leaves)):
+            raise ValueError("Invalid tree sizes for consistency proof")
+        
+        index = log_idx
+        proof = [self.leaves[index].log]
         current_level = [node.log for node in self.leaves]
         n = len(current_level)
         while n > 1:
@@ -48,7 +43,7 @@ class MerkleTree:
             n = len(current_level)
 
         self.root = current_level[0]
-        return [leaf_hash] + proof
+        return proof
 
     def consistency_proof(
         self, point1: int, point2: int
@@ -61,7 +56,7 @@ class MerkleTree:
         level = math.ceil(math.log2(n))
         first_node_idx = 2**level - 1
 
-        proof = {}
+        proof: dict[int, str] = {}
         proof[first_node_idx + point2 - 1] = current_level[point2 - 1]
         index = point2 - 1
         while n > 1:
@@ -86,16 +81,15 @@ class MerkleTree:
         current_level = [node.log for node in self.leaves[:point2]]
         n = len(current_level)
         level = math.ceil(math.log2(n))
-        first_node_idx = 2**level - 1
+        first_node_idx: int = 2**level - 1
 
-        t_p1 = {}
+        t_p1: dict[int, str] = {}
         t_p1[first_node_idx + point1 - 1] = current_level[point1 - 1]
         index = point1 - 1
         while n > 1:
             if n % 2:
                 current_level.append(current_level[-1])
                 n += 1
-            print(first_node_idx + index)
 
             if proof.get(first_node_idx + index) is not None:
                 proof.pop(first_node_idx + index)
@@ -121,6 +115,7 @@ class MerkleTree:
 
         return proof
 
+    @staticmethod
     @functools.lru_cache()
     def compute_hash(hash1: str, hash2: str) -> str:
         combined = (hash1 + hash2).encode()
