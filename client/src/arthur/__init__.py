@@ -3,13 +3,18 @@ import json
 import os
 import sys
 import threading
+import urllib.parse
+import websockets
+
 from asyncio import Queue
-from typing import Callable, Coroutine, Literal
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Callable, Coroutine, Self, TextIO
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
-import urllib.parse
-import websockets
+
 from merkle_tree import MerkleTree
 
 
