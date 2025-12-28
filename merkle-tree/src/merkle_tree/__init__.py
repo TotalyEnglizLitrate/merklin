@@ -4,8 +4,8 @@ import math
 
 
 class LogNode:
-    def __init__(self, log: str) -> None:
-        self.log = sha256(log.encode()).hexdigest()
+    def __init__(self, log: bytes) -> None:
+        self.log = sha256(log).hexdigest()
 
 
 class MerkleTree:
@@ -13,7 +13,7 @@ class MerkleTree:
         self.leaves: list[LogNode] = []
         self.root: str | None = None
 
-    def add_log(self, log: str) -> None:
+    def add_log(self, log: bytes) -> None:
         node = LogNode(log)
         self.leaves.append(node)
 
