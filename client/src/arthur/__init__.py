@@ -6,7 +6,6 @@ import threading
 import urllib.parse
 import websockets
 
-from asyncio import Queue
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Coroutine, Self, TextIO
@@ -31,16 +30,21 @@ class HookLogs(TextIO):
         self.capture = capture
         self.loop = loop
         self.on_write = hook
+        self.write_lock = threading.Lock()
         if on_close is not None:
             self.on_close = on_close
 
     def write(self, data: str) -> int:
-        self.capture.seek(0, os.SEEK_END)
-        asyncio.run_coroutine_threadsafe(self.on_write(self, data, self.capture.tell()), self.loop)
-        return self.capture.write(data)
+        with self.write_lock:
+            self.capture.seek(0, os.SEEK_END)
+            pos = self.capture.tell()
+            asyncio.run_coroutine_threadsafe(self.on_write(self, data, pos), self.loop)
+            return self.capture.write(data)
+
 
     def flush(self) -> None:
-        return self.capture.flush()
+        with self.write_lock:
+            return self.capture.flush()
 
     def close(self) -> None:
         if hasattr(self, "on_close"):
@@ -69,7 +73,7 @@ def hook_logs(capture: TextIO) -> TextIO:
 
     loop = asyncio.new_event_loop()
 
-    queue: Queue[tuple[str, LogData]] = Queue()
+    queue: asyncio.Queue[tuple[str, LogData]] = asyncio.Queue()
     shutdown_event: asyncio.Event | None = None
 
     async def on_write(hook: HookLogs, data: str, pos: int) -> None:
@@ -96,13 +100,14 @@ def hook_logs(capture: TextIO) -> TextIO:
 
 
 async def send_logs(
-    queue: Queue[tuple[str, LogData]],
+    queue: asyncio.Queue[tuple[str, LogData]],
     ws_url: str,
     hook: HookLogs,
     shutdown_event: asyncio.Event,
 ) -> None:
 
     data: list[LogData] = []
+    data_lock = asyncio.Lock()
 
     aes_key = AESGCM.generate_key(bit_length=256)
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -127,7 +132,7 @@ async def send_logs(
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
-                handle_challenge(websocket, hook, data, aes_key)
+                handle_challenge(websocket, hook, data, aes_key, data_lock)
             )
 
             while True:
@@ -142,7 +147,8 @@ async def send_logs(
                     continue
 
                 # AES Encryption
-                data.append(log_data)
+                async with data_lock:
+                    data.append(log_data)
                 enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
 
                 # signature
@@ -155,7 +161,7 @@ async def send_logs(
                     hashes.SHA256(),
                 )
 
-                message = {
+                message: dict[str, str | int] = {
                     "type": "log",
                     "data": enc_log.hex(),
                     "signature": signature.hex(),
@@ -182,12 +188,13 @@ def encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
     return aes.encrypt(nonce, data, None)
 
 
-def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes) -> MerkleTree:
+async def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes, data_lock: asyncio.Lock) -> MerkleTree:
     mtree = MerkleTree()
-    for log_data in data:
-        hook.seek(log_data.begin_offset)
-        log = encrypt(aes_key, log_data.nonce, hook.read(log_data.length).encode())
-        mtree.add_log(log)
+    async with data_lock:
+        for log_data in data:
+            hook.seek(log_data.begin_offset)
+            log = encrypt(aes_key, log_data.nonce, hook.read(log_data.length).encode())
+            mtree.add_log(log)
     return mtree
 
 
@@ -196,6 +203,7 @@ async def handle_challenge(
     hook: HookLogs,
     log_data: list[LogData],
     aes_key: bytes,
+    data_lock: asyncio.Lock,
 ) -> None:
     async for message in websocket:
         data = json.loads(message)
@@ -207,7 +215,7 @@ async def handle_challenge(
         elif data.get("type") == "challenge":
             try:
                 proof: dict[str, str | list[str] | list[int] | dict[int, str]]
-                mtree = grab_logs(log_data, hook, aes_key)
+                mtree = await grab_logs(log_data, hook, aes_key, data_lock)
                 if data.get("challenge_type") == "membership":
                     index = data.get("log_index")
 
