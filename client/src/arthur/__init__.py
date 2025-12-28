@@ -191,6 +191,9 @@ def encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
 async def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes, data_lock: asyncio.Lock) -> MerkleTree:
     mtree = MerkleTree()
     async with data_lock:
+        data = data.copy()
+
+    with hook.write_lock:
         for log_data in data:
             hook.seek(log_data.begin_offset)
             log = encrypt(aes_key, log_data.nonce, hook.read(log_data.length).encode())
