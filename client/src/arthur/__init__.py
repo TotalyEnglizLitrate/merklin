@@ -21,7 +21,7 @@ from merkle_tree import MerkleTree
 class HookLogs(TextIO):
     def __init__(
         self,
-        hook: Callable[[Self, str], Coroutine[None, None, None]],
+        hook: Callable[[Self, str, int], Coroutine[None, None, None]],
         loop: asyncio.AbstractEventLoop,
         capture: TextIO,
         on_close: Callable[[], None] | None = None,
@@ -35,7 +35,8 @@ class HookLogs(TextIO):
             self.on_close = on_close
 
     def write(self, data: str) -> int:
-        asyncio.run_coroutine_threadsafe(self.on_write(self, data), self.loop)
+        self.capture.seek(0, os.SEEK_END)
+        asyncio.run_coroutine_threadsafe(self.on_write(self, data, self.capture.tell()), self.loop)
         return self.capture.write(data)
 
     def flush(self) -> None:
@@ -68,11 +69,11 @@ def hook_logs(capture: TextIO) -> TextIO:
 
     loop = asyncio.new_event_loop()
 
-    queue: asyncio.Queue[tuple[str, LogData]] = asyncio.Queue()
+    queue: Queue[tuple[str, LogData]] = Queue()
     shutdown_event: asyncio.Event | None = None
 
-    async def on_write(hook: HookLogs, data: str) -> None:
-        await queue.put((data, LogData(hook.tell(), len(data), os.urandom(12))))
+    async def on_write(hook: HookLogs, data: str, pos: int) -> None:
+        await queue.put((data, LogData(pos, len(data), os.urandom(12))))
 
     hook = HookLogs(on_write, loop, capture)
 
