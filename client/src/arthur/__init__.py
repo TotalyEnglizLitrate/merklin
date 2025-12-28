@@ -18,122 +18,131 @@ from cryptography.hazmat.primitives import hashes, serialization
 from merkle_tree import MerkleTree
 
 
-class HookLogs:
+class HookLogs(TextIO):
     def __init__(
         self,
-        hook: Callable[[str], Coroutine[None, None, None]],
+        hook: Callable[[Self, str], Coroutine[None, None, None]],
         loop: asyncio.AbstractEventLoop,
-        capture: Literal["stdout", "stderr"] = "stdout",
+        capture: TextIO,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
+        if not (capture.readable() and capture.writable()):
+            raise ValueError("Capture stream must be readable and writable")
         self.capture = capture
         self.loop = loop
         self.on_write = hook
-        self.original_stream = sys.stdout if capture == "stdout" else sys.stderr
+        if on_close is not None:
+            self.on_close = on_close
 
-    def hook(self) -> None:
-        original = self.original_stream
-        loop = self.loop
-        on_write = self.on_write
+    def write(self, data: str) -> int:
+        asyncio.run_coroutine_threadsafe(self.on_write(self, data), self.loop)
+        return self.capture.write(data)
 
-        class AsyncCapture:
-            def write(self, data: str) -> int:
-                asyncio.run_coroutine_threadsafe(on_write(data), loop)
-                return original.write(data)
+    def flush(self) -> None:
+        return self.capture.flush()
 
-            def flush(self):
-                return original.flush()
+    def close(self) -> None:
+        if hasattr(self, "on_close"):
+            self.on_close()
+        return self.capture.close()
 
-            def __getattr__(self, name: str):
-                return getattr(original, name)
-
-        if self.capture == "stdout":
-            sys.stdout = AsyncCapture()
-        else:
-            sys.stderr = AsyncCapture()
+    def __getattr__(self, name: str):
+        return getattr(self.capture, name)
 
     def unhook(self) -> None:
-        if self.capture == "stdout":
-            sys.stdout = self.original_stream
-        else:
-            sys.stderr = self.original_stream
+        if hasattr(self, "on_close"):
+            self.on_close()
 
 
-def hook_logs(
-    capture: Literal["stdout", "stderr"] = "stdout",
-) -> Callable[[], None]:
+@dataclass
+class LogData:
+    begin_offset: int
+    length: int
+    nonce: bytes
+
+
+def hook_logs(capture: TextIO) -> TextIO:
     ws_url = os.getenv("MERKLIN_URL")
     if ws_url is None:
         raise RuntimeError("Merklin server endpoint not configured")
 
     loop = asyncio.new_event_loop()
-    queue: Queue[str] = Queue()
-    shutdown_event = asyncio.Event()
 
-    async def on_write(data: str) -> None:
-        await queue.put(data)
+    queue: asyncio.Queue[tuple[str, LogData]] = asyncio.Queue()
+    shutdown_event: asyncio.Event | None = None
+
+    async def on_write(hook: HookLogs, data: str) -> None:
+        await queue.put((data, LogData(hook.tell(), len(data), os.urandom(12))))
 
     hook = HookLogs(on_write, loop, capture)
-    hook.hook()
 
     def run_loop() -> None:
+        nonlocal shutdown_event
         asyncio.set_event_loop(loop)
+        shutdown_event = asyncio.Event()
         loop.run_until_complete(send_logs(queue, ws_url, hook, shutdown_event))
 
     thread = threading.Thread(target=run_loop, daemon=True)
     thread.start()
 
-    def close() -> None:
-        loop.call_soon_threadsafe(shutdown_event.set)
+    def on_close() -> None:
+        if shutdown_event is not None:
+            loop.call_soon_threadsafe(shutdown_event.set)
         thread.join()
 
-    return close
+    hook.on_close = on_close
+    return hook
 
 
 async def send_logs(
-    queue: Queue[str],
+    queue: Queue[tuple[str, LogData]],
     ws_url: str,
     hook: HookLogs,
     shutdown_event: asyncio.Event,
 ) -> None:
+
+    data: list[LogData] = []
 
     aes_key = AESGCM.generate_key(bit_length=256)
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     public_key = private_key.public_key()
 
-    pem = public_key.public_bytes(
+    pem: bytes = public_key.public_bytes(
         encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
     base_url = f"{ws_url}/log"
-    query_params = {"token": "firebase jwt", "public_key": pem.hex()}
+    query_params: dict[str, str] = {
+        "token": os.environ["MERKLIN_TOKEN"],
+        "public_key": pem.hex(),
+    }
     encoded_params = urllib.parse.urlencode(query_params)
     complete_url = f"{base_url}?{encoded_params}"
 
     listener: asyncio.Task[None] | None = None
 
     try:
-        async with websockets.connect(f"{complete_url}/log") as websocket:
-            Mtree = MerkleTree()
-            listener = asyncio.create_task(handle_challenge(websocket, Mtree))
+        async with websockets.connect(complete_url) as websocket:
+            listener = asyncio.create_task(
+                handle_challenge(websocket, hook, data, aes_key)
+            )
 
             while True:
-                # Check if shutdown was requested
                 if shutdown_event.is_set() and queue.empty():
                     break
-
                 try:
                     # Use wait_for with a timeout to check shutdown event periodically
-                    log_entry = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    log_entry, log_data = await asyncio.wait_for(
+                        queue.get(), timeout=0.1
+                    )
                 except asyncio.TimeoutError:
                     continue
 
                 # AES Encryption
-                aes = AESGCM(aes_key)
-                nonce = os.urandom(12)
-                enc_log = aes.encrypt(nonce, log_entry.encode(), None)
+                data.append(log_data)
+                enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
 
                 # signature
                 signature = private_key.sign(
@@ -150,31 +159,42 @@ async def send_logs(
                     "data": enc_log.hex(),
                     "signature": signature.hex(),
                 }
-                Mtree.add_log(enc_log.hex())
                 await websocket.send(json.dumps(message))
 
     except websockets.exceptions.ConnectionClosed:
-        # WebSocket closed by server or network
-        # TODO: decide policy (halt, escalate, etc.)
-        pass
-
-    except asyncio.CancelledError:
-        # Task was cancelled during shutdown
+        print("Connection to Merklin server closed", file=sys.stderr)
         raise
-
+    except asyncio.CancelledError:
+        print("Log sending task cancelled", file=sys.stderr)
+        raise
     except Exception:
-        # Any unexpected failure
-        # TODO: escalate
-        pass
-
+        raise
     finally:
         if listener:
             listener.cancel()
         hook.unhook()
 
 
+@lru_cache(maxsize=2**18)
+def encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    aes = AESGCM(key)
+    return aes.encrypt(nonce, data, None)
+
+
+def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes) -> MerkleTree:
+    mtree = MerkleTree()
+    for log_data in data:
+        hook.seek(log_data.begin_offset)
+        log = encrypt(aes_key, log_data.nonce, hook.read(log_data.length).encode())
+        mtree.add_log(log)
+    return mtree
+
+
 async def handle_challenge(
-    websocket: websockets.ClientConnection, mtree: MerkleTree
+    websocket: websockets.ClientConnection,
+    hook: HookLogs,
+    log_data: list[LogData],
+    aes_key: bytes,
 ) -> None:
     async for message in websocket:
         data = json.loads(message)
@@ -185,26 +205,33 @@ async def handle_challenge(
 
         elif data.get("type") == "challenge":
             try:
+                proof: dict[str, str | list[str] | list[int] | dict[int, str]]
+                mtree = grab_logs(log_data, hook, aes_key)
                 if data.get("challenge_type") == "membership":
                     index = data.get("log_index")
-                    member = mtree.membership_proof(index)
+
+                    membership_proof = mtree.membership_proof(index)
                     proof = {
                         "type": "proof",
                         "proof_type": "membership",
-                        "proof": member,
+                        "proof": membership_proof,
                         "indices": [index],
                     }
                 elif data.get("challenge_type") == "consistency":
                     point1 = data.get("previous_size")
                     point2 = data.get("current_size")
-                    consistent = mtree.consistency_proof(point1, point2)
+                    consistency_proof = mtree.consistency_proof(point1, point2)
                     proof = {
                         "type": "proof",
                         "proof_type": "consistency",
-                        "proof": consistent,
+                        "proof": consistency_proof,
                         "indices": [point1, point2],
                     }
-            except Exception as e:
-                proof = {"type": "error", "description": f"{e}"}
-            finally:
+                else:
+                    raise ValueError("Unknown challenge type")
+
                 await websocket.send(json.dumps(proof))
+            except Exception as e:
+                await websocket.send(
+                    json.dumps({"type": "error", "description": f"{e}"})
+                )
