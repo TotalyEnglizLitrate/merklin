@@ -28,7 +28,9 @@ class Connection:
     websocket: WebSocket
     tree: MerkleTree
     public_key: rsa.RSAPublicKey
-    outstanding_challenges: dict[tuple[int, int] | int, dict[int, str] | list[str]] | None = None
+    outstanding_challenges: (
+        dict[tuple[int, int] | int, dict[int, str] | list[str]] | None
+    ) = None
 
 
 class ConnectionManager:
@@ -171,6 +173,9 @@ if __name__ == "__main__":
     cred = credentials.Certificate("firebase-key.json")
     firebase_app = initialize_app(cred)
     db = cast(
-        AsyncClient, firestore_async.client(firebase_app, "logs") # pyright: ignore[reportUnknownMemberType]
-    )  
+        AsyncClient,
+        firestore_async.client(
+            firebase_app, "logs"
+        ),  # pyright: ignore[reportUnknownMemberType]
+    )
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,9 +1,12 @@
 from google.cloud.firestore_v1.async_client import AsyncClient
 
+
 async def add_log(
     db: AsyncClient, encrypted_data: str, log_index: int, uid: str
 ) -> None:
-    await db.collection("logs").document().set( # pyright: ignore[reportUnknownMemberType]
+    await db.collection(
+        "logs"
+    ).document().set(  # pyright: ignore[reportUnknownMemberType]
         {
             "uid": uid,
             "encrypted_message": encrypted_data,
@@ -17,7 +20,7 @@ async def get_log_by_merkle_index(
 ) -> dict[str, str | int | bytes] | None:
     query = (
         db.collection("logs")
-        .where("uid", "==", uid) # pyright: ignore[reportUnknownMemberType]
+        .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
         .where("merkle_index", "==", log_index)
         .limit(1)
     )
