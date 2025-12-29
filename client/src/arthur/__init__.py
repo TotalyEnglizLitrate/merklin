@@ -52,7 +52,7 @@ class HookLogs(TextIO):
         if hasattr(self, "on_close"):
             self.on_close()
         return self.capture.close()
-    
+
     def seek(self, pos: int, whence: int = 0, /):
         return self.capture.seek(pos, whence)
 
@@ -82,7 +82,6 @@ def hook_logs(capture: TextIO) -> TextIO:
     shutdown_event: asyncio.Event | None = None
 
     async def on_write(hook: HookLogs, data: str, pos: int) -> None:
-        print(data, end="")
         await queue.put((data, LogData(pos, len(data), os.urandom(12))))
 
     hook = HookLogs(on_write, loop, capture)
@@ -208,18 +207,12 @@ async def grab_logs(
     async with data_lock:
         data = data.copy()
 
-    print(data)
-    hook.seek(0)
-    print(hook.read())
-
     with hook.write_lock:
         for log_data in data:
             hook.seek(log_data.begin_offset)
             log = hook.read(log_data.length)
-            print(f"DEBUG: Read {len(log)} bytes: {log[:50]}", file=sys.stderr)  #
             enc_log = encrypt(aes_key, log_data.nonce, log.encode())
             mtree.add_log(enc_log)
-            print(log)
     return mtree
 
 
@@ -249,7 +242,6 @@ async def handle_challenge(
                     mtree = await grab_logs(log_data, hook, aes_key, data_lock)
                     if data.get("challenge_type") == "membership":
                         index = data.get("log_index")
-                        print(data)
                         membership_proof = mtree.membership_proof(index)
                         proof = {
                             "type": "proof",
@@ -269,7 +261,7 @@ async def handle_challenge(
                         }
                     else:
                         raise ValueError("Unknown challenge type")
-                    print(proof)
+                    
                     await websocket.send(json.dumps(proof))
                 except Exception as e:
                     await websocket.send(

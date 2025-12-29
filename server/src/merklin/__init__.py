@@ -109,7 +109,6 @@ async def log_ws_endpoint(
     try:
         async for message in websocket.iter_json():
             msg_type = message.get("type")
-            print(message)
             if msg_type == "log":
                 data = message.get("data")
                 signature = message.get("signature")
@@ -138,7 +137,6 @@ async def log_ws_endpoint(
                                 f"Tampering detected! Challenge: {connection.outstanding_challenge}"
                             )
                             break
-                            
 
                 elif proof_type == "consistency":
                     assert isinstance(connection.outstanding_challenge, tuple)
@@ -153,8 +151,7 @@ async def log_ws_endpoint(
                             break
                 else:
                     raise ValueError("Invalid proof type")
-                
-                print(outstanding_proof)
+
             else:
                 await websocket.send_json(
                     {"type": "error", "error": "Unknown message type"}
