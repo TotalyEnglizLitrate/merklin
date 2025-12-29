@@ -72,7 +72,6 @@ async def log_ws_endpoint(
     websocket: WebSocket, public_key: str, uid: str = Depends(verify_token)
 ):
     await websocket.accept()
-    challenger = asyncio.create_task(challenge_subroutine(websocket))
     conn_manager: ConnectionManager = websocket.app.connection_manager
     connection = conn_manager.add_connection(
         websocket,
@@ -82,6 +81,7 @@ async def log_ws_endpoint(
             serialization.load_pem_public_key(bytes.fromhex(public_key)),
         ),
     )
+    challenger = asyncio.create_task(challenge_subroutine(connection))
     counter = 0
     try:
         async for message in websocket.iter_json():
@@ -100,7 +100,19 @@ async def log_ws_endpoint(
             elif msg_type == "proof":
                 # TODO: verify outstanding proof
                 # enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
-                ...
+                proof_type = message.get("proof_type")
+                proof = message.get("proof")
+                outstanding_proof = None
+                if proof_type == "membership":
+                    log_index = connection.outstanding_challenge
+                    outstanding_proof = connection.tree.membership_proof(log_index)
+                elif proof_type == "consistency":
+                    size1, size2 = connection.outstanding_challenge
+                    outstanding_proof = connection.tree.consistency_proof(size1, size2)
+                if proof != outstanding_proof:
+                    print(
+                        f"Tampering detected! Challenge: {connection.outstanding_challenge}"
+                    )
             else:
                 await websocket.send_json({"error": "Unknown message type"})
     except WebSocketDisconnect:
@@ -136,7 +148,7 @@ def process_log(data: bytes, signature: bytes, conn: Connection) -> None:
     conn.tree.add_log(data)
 
 
-async def challenge_subroutine(websocket: WebSocket):
+async def challenge_subroutine(connection: Connection):
     try:
         while True:
             await asyncio.sleep(random.randrange(600, 1200))
@@ -144,21 +156,26 @@ async def challenge_subroutine(websocket: WebSocket):
             challenge: dict[str, int | str]
             if challenge_type == "membership":
                 # Dummy challenge for membership proof - implement random log selection
+                log_index = 1
                 challenge = {
                     "type": "challenge",
                     "challenge_type": "membership",
-                    "log_index": 1,
+                    "log_index": log_index,
                 }
+                connection.outstanding_challenge = log_index
             else:
                 # Dummy challenge for consistency proof - implement random tree size selection
+                size1 = 1
+                size2 = 2
                 challenge = {
                     "type": "challenge",
                     "challenge_type": "consistency",
-                    "previous_size": 1,
-                    "current_size": 2,
+                    "previous_size": size1,
+                    "current_size": size2,
                 }
+                connection.outstanding_challenge = (size1, size2)
             try:
-                await websocket.send_json(challenge)
+                await connection.websocket.send_json(challenge)
             except (WebSocketDisconnect, WebSocketException):
                 break
     except asyncio.CancelledError:
