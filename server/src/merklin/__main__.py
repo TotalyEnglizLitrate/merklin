@@ -8,6 +8,7 @@ import firebase_admin.credentials as credentials
 import firebase_admin.firestore_async as firestore_async
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
+from fastapi.responses import HTMLResponse
 from firebase_admin import initialize_app
 from google.cloud.firestore_v1.async_client import AsyncClient
 
@@ -20,6 +21,7 @@ import json
 import random
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import secrets
@@ -183,6 +185,10 @@ async def challenge_subroutine(connection: Connection):
     except asyncio.CancelledError:
         pass
 
+@app.get("/signin")
+async def signin() -> HTMLResponse:
+    html_content = (Path(__file__).parent / "signin.html").read_text()
+    return HTMLResponse(content=html_content)
 
 if __name__ == "__main__":
     import uvicorn
