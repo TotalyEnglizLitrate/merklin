@@ -20,12 +20,28 @@ import asyncio
 import json
 import random
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import secrets
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cred = credentials.Certificate("firebase-key.json")
+    app.state.firebase_app = initialize_app(cred)
+    app.state.conn_manager = ConnectionManager()
+    app.state.db = cast(
+        AsyncClient,
+        firestore_async.client(  # pyright: ignore[reportUnknownMemberType]
+            app.state.firebase_app, "logs"
+        ),
+    )
+    yield
+    app.state.db.close()
+
+app = FastAPI(lifespan=lifespan)
 
 @dataclass
 class Connection:
@@ -55,9 +71,6 @@ class ConnectionManager:
         return uid in self.active_connections
 
 
-app = FastAPI(connection_manager=ConnectionManager())
-
-
 async def verify_token(websocket: WebSocket) -> str:
     token = websocket.query_params.get("token")
     if token is None:
@@ -76,7 +89,7 @@ async def log_ws_endpoint(
     websocket: WebSocket, public_key: str, uid: str = Depends(verify_token)
 ):
     await websocket.accept()
-    conn_manager: ConnectionManager = websocket.app.connection_manager
+    conn_manager: ConnectionManager = websocket.app.state.conn_manager
     connection = conn_manager.add_connection(
         websocket,
         uid,
@@ -99,7 +112,7 @@ async def log_ws_endpoint(
                     )
                     continue
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
-                await add_log(db, data.hex(), counter, uid)
+                await add_log(websocket.app.state.db, data.hex(), counter, uid)
                 counter += 1
             elif msg_type == "proof":
                 # TODO: verify outstanding proof
@@ -194,12 +207,5 @@ async def signin() -> HTMLResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    cred = credentials.Certificate("firebase-key.json")
-    firebase_app = initialize_app(cred)
-    db = cast(
-        AsyncClient,
-        firestore_async.client(  # pyright: ignore[reportUnknownMemberType]
-            firebase_app, "logs"
-        ),
-    )
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
