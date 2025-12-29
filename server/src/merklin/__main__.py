@@ -95,7 +95,7 @@ async def log_ws_endpoint(
                 signature = message.get("signature")
                 if data is None or signature is None:
                     await websocket.send_json(
-                        {"error": "Missing log data or signature"}
+                        {"type": "error", "error": "Missing log data or signature"}
                     )
                     continue
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
@@ -119,17 +119,17 @@ async def log_ws_endpoint(
                         f"Tampering detected! Challenge: {connection.outstanding_challenge}"
                     )
             else:
-                await websocket.send_json({"error": "Unknown message type"})
+                await websocket.send_json({"type": "error", "error": "Unknown message type"})
     except WebSocketDisconnect:
         print("WebSocket disconnected")
     except WebSocketException as e:
         print(f"WebSocket error: {e}")
     except json.JSONDecodeError:
-        await websocket.send_json({"error": "Invalid JSON format"})
+        await websocket.send_json({"type": "error", "error": "Invalid JSON format"})
     except cryptography.exceptions.InvalidSignature:
-        await websocket.send_json({"error": "Invalid log signature"})
+        await websocket.send_json({"type": "error", "error": "Invalid log signature"})
     except Exception as e:
-        await websocket.send_json({"error": f"Internal server error: {e}"})
+        await websocket.send_json({"type": "error", "error": f"Internal server error: {e}"})
     finally:
         await conn_manager.remove_connection(uid)
         challenger.cancel()
