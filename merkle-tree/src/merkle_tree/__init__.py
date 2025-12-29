@@ -18,7 +18,7 @@ class MerkleTree:
         self.leaves.append(node)
 
     def membership_proof(self, log_idx: int) -> list[str]:
-        if not (0 < log_idx <= len(self.leaves)):
+        if not (0 <= log_idx < len(self.leaves)):
             raise ValueError("Invalid tree sizes for consistency proof")
         
         index = log_idx
