@@ -29,7 +29,7 @@ import secrets
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cred = credentials.Certificate("firebase-key.json")
+    cred = credentials.Certificate(Path(__file__).parent.parent.parent / "merklin-id-firebase.json")
     app.state.firebase_app = initialize_app(cred)
     app.state.conn_manager = ConnectionManager()
     app.state.db = cast(
