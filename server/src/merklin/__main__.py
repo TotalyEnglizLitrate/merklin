@@ -3,8 +3,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 import cryptography.exceptions
 
+import firebase_admin.auth as auth
+import firebase_admin.credentials as credentials
+import firebase_admin.firestore_async as firestore_async
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
+from firebase_admin import initialize_app
+from google.cloud.firestore_v1.async_client import AsyncClient
+
+
 from merkle_tree import MerkleTree
+from .firestore_services import add_log, get_log_by_merkle_index
 
 import asyncio
 import json
@@ -12,9 +21,6 @@ import random
 
 from dataclasses import dataclass
 from typing import cast
-
-from firestore_services import add_log, get_log_by_merkle_index
-from firebase_admin import auth
 
 
 @dataclass
@@ -29,17 +35,19 @@ class ConnectionManager:
         self.active_connections: dict[str, Connection] = {}
 
     def add_connection(
-        self, websocket: WebSocket, token: str, public_key: rsa.RSAPublicKey
+        self, websocket: WebSocket, uid: str, public_key: rsa.RSAPublicKey
     ) -> Connection:
         # TODO: Check if the logger is registered
-        self.active_connections[token] = Connection(websocket, MerkleTree(), public_key)
-        return self.active_connections[token]
+        self.active_connections[uid] = Connection(websocket, MerkleTree(), public_key)
+        return self.active_connections[uid]
 
-    def remove_connection(self, token: str) -> None:
-        self.active_connections.pop(token, None)
+    async def remove_connection(self, uid: str) -> None:
+        conn = self.active_connections.pop(uid, None)
+        if conn is not None:
+            await conn.websocket.close()
 
-    def is_connected(self, token: str) -> bool:
-        return token in self.active_connections
+    def is_connected(self, uid: str) -> bool:
+        return uid in self.active_connections
 
 
 app = FastAPI(connection_manager=ConnectionManager())
@@ -47,31 +55,32 @@ app = FastAPI(connection_manager=ConnectionManager())
 
 async def verify_token(websocket: WebSocket) -> str:
     token = websocket.query_params.get("token")
-    # TODO: Implement token verification logic with firebase
+    if token is None:
+        raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
     try:
-        decoded_token = auth.verify_id_token(token)
-        uid = decoded_token["uid"]
+        decoded_token = auth.verify_id_token(token)  # type: ignore
+        uid = cast(str, decoded_token["uid"])
         return uid
     except Exception as e:
         print(f"Token Verification error: {e}")
+        raise
 
 
 @app.websocket("/log")
 async def log_ws_endpoint(
-    websocket: WebSocket, public_key: str, token: str = Depends(verify_token)
+    websocket: WebSocket, public_key: str, uid: str = Depends(verify_token)
 ):
     await websocket.accept()
     challenger = asyncio.create_task(challenge_subroutine(websocket))
     conn_manager: ConnectionManager = websocket.app.connection_manager
     connection = conn_manager.add_connection(
         websocket,
-        token,
+        uid,
         cast(
             rsa.RSAPublicKey,
             serialization.load_pem_public_key(bytes.fromhex(public_key)),
         ),
     )
-    uid = verify_token(websocket)
     counter = 0
     try:
         async for message in websocket.iter_json():
@@ -85,7 +94,7 @@ async def log_ws_endpoint(
                     )
                     continue
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
-                add_log(data.hex(), counter, uid)
+                await add_log(db, data.hex(), counter, uid)
                 counter += 1
             elif msg_type == "proof":
                 # TODO: verify outstanding proof
@@ -104,7 +113,7 @@ async def log_ws_endpoint(
     except Exception as e:
         await websocket.send_json({"error": f"Internal server error: {e}"})
     finally:
-        conn_manager.remove_connection(token)
+        await conn_manager.remove_connection(uid)
         challenger.cancel()
         try:
             await challenger
@@ -123,7 +132,7 @@ def process_log(data: bytes, signature: bytes, conn: Connection) -> None:
         hashes.SHA256(),
     )
 
-    conn.tree.add_log(data.hex())
+    conn.tree.add_log(data)
 
 
 async def challenge_subroutine(websocket: WebSocket):
@@ -153,3 +162,14 @@ async def challenge_subroutine(websocket: WebSocket):
                 break
     except asyncio.CancelledError:
         pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    cred = credentials.Certificate("firebase-key.json")
+    firebase_app = initialize_app(cred)
+    db = cast(
+        AsyncClient, firestore_async.client(firebase_app, "logs") # pyright: ignore[reportUnknownMemberType]
+    )  
+    uvicorn.run(app, host="0.0.0.0", port=8000)

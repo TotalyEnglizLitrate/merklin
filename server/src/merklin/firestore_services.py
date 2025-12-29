@@ -1,31 +1,27 @@
-from firebase_admin import firestore
-from firebase_init import init_firebase
+from google.cloud.firestore_v1.async_client import AsyncClient
 
-init_firebase()
-db = firestore.client()
-
-
-def add_log(encrypted_data: str, merkle_index: int, uid) -> None:
-    db.collection("logs").document().set(
+async def add_log(
+    db: AsyncClient, encrypted_data: str, log_index: int, uid: str
+) -> None:
+    await db.collection("logs").document().set( # pyright: ignore[reportUnknownMemberType]
         {
             "uid": uid,
             "encrypted_message": encrypted_data,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-            "merkle_index": merkle_index,  # logical order
+            "log_index": log_index,
         }
     )
 
 
-def get_log_by_merkle_index(uid, merkle_index: int):
+async def get_log_by_merkle_index(
+    db: AsyncClient, uid: str, log_index: int
+) -> dict[str, str | int | bytes] | None:
     query = (
         db.collection("logs")
-        .where("uid", "==", uid)
-        .where("merkle_index", "==", merkle_index)
+        .where("uid", "==", uid) # pyright: ignore[reportUnknownMemberType]
+        .where("merkle_index", "==", log_index)
         .limit(1)
     )
-
-    docs = list(query.stream())
-    if not docs:
+    try:
+        return (await anext(query.stream())).to_dict()
+    except StopAsyncIteration:
         return None
-
-    return docs[0].to_dict()
