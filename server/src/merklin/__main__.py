@@ -28,9 +28,7 @@ class Connection:
     websocket: WebSocket
     tree: MerkleTree
     public_key: rsa.RSAPublicKey
-    outstanding_challenges: (
-        dict[tuple[int, int] | int, dict[int, str] | list[str]] | None
-    ) = None
+    outstanding_challenge: int | tuple[int, int] | None = None
 
 
 class ConnectionManager:
