@@ -44,7 +44,7 @@ class HookLogs(TextIO):
     def flush(self) -> None:
         with self.write_lock:
             return self.capture.flush()
-        
+
     def read(self, size=-1, /) -> str:
         return self.capture.read(size)
 
@@ -52,6 +52,9 @@ class HookLogs(TextIO):
         if hasattr(self, "on_close"):
             self.on_close()
         return self.capture.close()
+    
+    def seek(self, pos: int, whence: int = 0, /):
+        return self.capture.seek(pos, whence)
 
     def __getattr__(self, name: str):
         return getattr(self.capture, name)
@@ -79,6 +82,7 @@ def hook_logs(capture: TextIO) -> TextIO:
     shutdown_event: asyncio.Event | None = None
 
     async def on_write(hook: HookLogs, data: str, pos: int) -> None:
+        print(data, end="")
         await queue.put((data, LogData(pos, len(data), os.urandom(12))))
 
     hook = HookLogs(on_write, loop, capture)
@@ -204,13 +208,18 @@ async def grab_logs(
     async with data_lock:
         data = data.copy()
 
+    print(data)
+    hook.seek(0)
+    print(hook.read())
+
     with hook.write_lock:
         for log_data in data:
             hook.seek(log_data.begin_offset)
             log = hook.read(log_data.length)
-            assert log is not None
+            print(f"DEBUG: Read {len(log)} bytes: {log[:50]}", file=sys.stderr)  #
             enc_log = encrypt(aes_key, log_data.nonce, log.encode())
             mtree.add_log(enc_log)
+            print(log)
     return mtree
 
 

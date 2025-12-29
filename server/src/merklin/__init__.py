@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     app.state.conn_manager = ConnectionManager()
     app.state.db = cast(
         AsyncClient,
-        firestore_async.client( # pyright: ignore[reportUnknownMemberType]
+        firestore_async.client(  # pyright: ignore[reportUnknownMemberType]
             app.state.firebase_app
         ),
     )
@@ -132,14 +132,29 @@ async def log_ws_endpoint(
                     outstanding_proof = connection.tree.membership_proof(
                         connection.outstanding_challenge
                     )
+                    for client, srv in zip(proof, outstanding_proof):
+                        if client != srv:
+                            print(
+                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
+                            )
+                            break
+                            
+
                 elif proof_type == "consistency":
                     assert isinstance(connection.outstanding_challenge, tuple)
                     size1, size2 = connection.outstanding_challenge
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
-                if proof != outstanding_proof:
-                    print(
-                        f"Tampering detected! Challenge: {connection.outstanding_challenge}"
-                    )
+
+                    for idx, hash in outstanding_proof.items():
+                        if proof.get(idx) != hash:
+                            print(
+                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
+                            )
+                            break
+                else:
+                    raise ValueError("Invalid proof type")
+                
+                print(outstanding_proof)
             else:
                 await websocket.send_json(
                     {"type": "error", "error": "Unknown message type"}
