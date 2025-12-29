@@ -13,7 +13,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 from merkle_tree import MerkleTree
-from .firestore_services import add_log, get_log_by_merkle_index
+from .firestore_services import add_log, get_log_by_index
 
 import asyncio
 import json
@@ -174,8 +174,8 @@ if __name__ == "__main__":
     firebase_app = initialize_app(cred)
     db = cast(
         AsyncClient,
-        firestore_async.client(
+        firestore_async.client(  # pyright: ignore[reportUnknownMemberType]
             firebase_app, "logs"
-        ),  # pyright: ignore[reportUnknownMemberType]
+        ),
     )
     uvicorn.run(app, host="0.0.0.0", port=8000)

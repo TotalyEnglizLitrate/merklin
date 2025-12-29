@@ -15,7 +15,7 @@ async def add_log(
     )
 
 
-async def get_log_by_merkle_index(
+async def get_log_by_index(
     db: AsyncClient, uid: str, log_index: int
 ) -> dict[str, str | int | bytes] | None:
     query = (
