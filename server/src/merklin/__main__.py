@@ -14,7 +14,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 from merkle_tree import MerkleTree
-from .firestore_services import add_log, get_log_by_index
+from .firestore_services import add_log
 
 import asyncio
 import json
@@ -108,9 +108,10 @@ async def log_ws_endpoint(
                 proof = message.get("proof")
                 outstanding_proof = None
                 if proof_type == "membership":
-                    log_index = connection.outstanding_challenge
-                    outstanding_proof = connection.tree.membership_proof(log_index)
+                    assert isinstance(connection.outstanding_challenge, int)
+                    outstanding_proof = connection.tree.membership_proof(connection.outstanding_challenge)
                 elif proof_type == "consistency":
+                    assert isinstance(connection.outstanding_challenge, tuple)
                     size1, size2 = connection.outstanding_challenge
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
                 if proof != outstanding_proof:
