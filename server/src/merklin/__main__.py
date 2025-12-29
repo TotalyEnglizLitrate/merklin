@@ -22,6 +22,8 @@ import random
 from dataclasses import dataclass
 from typing import cast
 
+import secrets
+
 
 @dataclass
 class Connection:
@@ -156,7 +158,7 @@ async def challenge_subroutine(connection: Connection):
             challenge: dict[str, int | str]
             if challenge_type == "membership":
                 # Dummy challenge for membership proof - implement random log selection
-                log_index = 1
+                log_index = secrets.randbelow(len(connection.tree.leaves))
                 challenge = {
                     "type": "challenge",
                     "challenge_type": "membership",
@@ -165,8 +167,8 @@ async def challenge_subroutine(connection: Connection):
                 connection.outstanding_challenge = log_index
             else:
                 # Dummy challenge for consistency proof - implement random tree size selection
-                size1 = 1
-                size2 = 2
+                size2 = secrets.randbelow(len(connection.tree.leaves) - 1) + 1
+                size1 = secrets.randbelow(size2)
                 challenge = {
                     "type": "challenge",
                     "challenge_type": "consistency",
