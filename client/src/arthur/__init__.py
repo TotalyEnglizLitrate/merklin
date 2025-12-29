@@ -219,8 +219,12 @@ async def handle_challenge(
         data = json.loads(message)
 
         if data.get("type") == "error":
-            # TODO: handle error
-            pass
+            description = data.get("error")
+
+            if description is not None:
+                print(f"Merklin server error: {description}", file=sys.stderr)
+            else:
+                print("Merklin server sent an unknown error", file=sys.stderr)
 
         elif data.get("type") == "challenge":
             async with challenge_lock:
