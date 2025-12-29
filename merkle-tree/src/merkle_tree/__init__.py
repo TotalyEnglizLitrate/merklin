@@ -19,8 +19,8 @@ class MerkleTree:
 
     def membership_proof(self, log_idx: int) -> list[str]:
         if not (0 <= log_idx < len(self.leaves)):
-            raise ValueError("Invalid tree sizes for consistency proof")
-        
+            raise ValueError("Invalid tree sizes for membership proof")
+
         index = log_idx
         proof = [self.leaves[index].log]
         current_level = [node.log for node in self.leaves]
@@ -45,10 +45,8 @@ class MerkleTree:
         self.root = current_level[0]
         return proof
 
-    def consistency_proof(
-        self, point1: int, point2: int
-    ) -> dict[int, str]:
-        if not (0 < point1 <= point2 <= len(self.leaves)):
+    def consistency_proof(self, point1: int, point2: int) -> dict[int, str]:
+        if not (0 <= point1 <= point2 < len(self.leaves)):
             raise ValueError("Invalid tree sizes for consistency proof")
 
         current_level = [node.log for node in self.leaves[:point2]]

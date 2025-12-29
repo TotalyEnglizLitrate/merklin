@@ -28,21 +28,26 @@ from typing import cast
 
 import secrets
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cred = credentials.Certificate(Path(__file__).parent.parent.parent / "merklin-id-firebase.json")
+    cred = credentials.Certificate(
+        Path(__file__).parent.parent.parent / "merklin-id-firebase.json"
+    )
     app.state.firebase_app = initialize_app(cred)
     app.state.conn_manager = ConnectionManager()
     app.state.db = cast(
         AsyncClient,
-        firestore_async.client(  # pyright: ignore[reportUnknownMemberType]
-            app.state.firebase_app, "logs"
+        firestore_async.client( # pyright: ignore[reportUnknownMemberType]
+            app.state.firebase_app
         ),
     )
     yield
     app.state.db.close()
 
+
 app = FastAPI(lifespan=lifespan)
+
 
 @dataclass
 class Connection:
@@ -104,8 +109,9 @@ async def log_ws_endpoint(
     try:
         async for message in websocket.iter_json():
             msg_type = message.get("type")
+            print(message)
             if msg_type == "log":
-                data = message.get("log")
+                data = message.get("data")
                 signature = message.get("signature")
                 if data is None or signature is None:
                     await websocket.send_json(
@@ -113,7 +119,7 @@ async def log_ws_endpoint(
                     )
                     continue
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
-                await add_log(websocket.app.state.db, data.hex(), counter, uid)
+                await add_log(websocket.app.state.db, data, counter, uid)
                 counter += 1
             elif msg_type == "proof":
                 # TODO: verify outstanding proof
@@ -123,7 +129,9 @@ async def log_ws_endpoint(
                 outstanding_proof = None
                 if proof_type == "membership":
                     assert isinstance(connection.outstanding_challenge, int)
-                    outstanding_proof = connection.tree.membership_proof(connection.outstanding_challenge)
+                    outstanding_proof = connection.tree.membership_proof(
+                        connection.outstanding_challenge
+                    )
                 elif proof_type == "consistency":
                     assert isinstance(connection.outstanding_challenge, tuple)
                     size1, size2 = connection.outstanding_challenge
@@ -133,7 +141,9 @@ async def log_ws_endpoint(
                         f"Tampering detected! Challenge: {connection.outstanding_challenge}"
                     )
             else:
-                await websocket.send_json({"type": "error", "error": "Unknown message type"})
+                await websocket.send_json(
+                    {"type": "error", "error": "Unknown message type"}
+                )
     except WebSocketDisconnect:
         print("WebSocket disconnected")
     except WebSocketException as e:
@@ -143,7 +153,9 @@ async def log_ws_endpoint(
     except cryptography.exceptions.InvalidSignature:
         await websocket.send_json({"type": "error", "error": "Invalid log signature"})
     except Exception as e:
-        await websocket.send_json({"type": "error", "error": f"Internal server error: {e}"})
+        await websocket.send_json(
+            {"type": "error", "error": f"Internal server error: {e}"}
+        )
     finally:
         await conn_manager.remove_connection(uid)
         challenger.cancel()
@@ -170,7 +182,7 @@ def process_log(data: bytes, signature: bytes, conn: Connection) -> None:
 async def challenge_subroutine(connection: Connection):
     try:
         while True:
-            await asyncio.sleep(random.randrange(600, 1200))
+            await asyncio.sleep(random.randrange(10, 15))
             challenge_type = random.choice(["membership", "consistency"])
             challenge: dict[str, int | str]
             if challenge_type == "membership":
@@ -186,6 +198,7 @@ async def challenge_subroutine(connection: Connection):
                 # Dummy challenge for consistency proof - implement random tree size selection
                 size2 = secrets.randbelow(len(connection.tree.leaves) - 1) + 1
                 size1 = secrets.randbelow(size2)
+                size1, size2 = sorted((size2, size1))
                 challenge = {
                     "type": "challenge",
                     "challenge_type": "consistency",
@@ -199,6 +212,7 @@ async def challenge_subroutine(connection: Connection):
                 break
     except asyncio.CancelledError:
         pass
+
 
 @app.get("/signin")
 async def signin() -> HTMLResponse:
