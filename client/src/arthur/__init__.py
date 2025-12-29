@@ -108,6 +108,7 @@ async def send_logs(
 
     data: list[LogData] = []
     data_lock = asyncio.Lock()
+    challenge_lock = asyncio.Lock()
 
     aes_key = AESGCM.generate_key(bit_length=256)
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -132,12 +133,17 @@ async def send_logs(
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
-                handle_challenge(websocket, hook, data, aes_key, data_lock)
+                handle_challenge(websocket, hook, data, aes_key, data_lock, challenge_lock)
             )
 
             while True:
                 if shutdown_event.is_set() and queue.empty():
                     break
+
+                if challenge_lock.locked():
+                    await asyncio.sleep(0.1)
+                    continue
+
                 try:
                     # Use wait_for with a timeout to check shutdown event periodically
                     log_entry, log_data = await asyncio.wait_for(
@@ -207,6 +213,7 @@ async def handle_challenge(
     log_data: list[LogData],
     aes_key: bytes,
     data_lock: asyncio.Lock,
+    challenge_lock: asyncio.Lock,
 ) -> None:
     async for message in websocket:
         data = json.loads(message)
@@ -216,34 +223,35 @@ async def handle_challenge(
             pass
 
         elif data.get("type") == "challenge":
-            try:
-                proof: dict[str, str | list[str] | list[int] | dict[int, str]]
-                mtree = await grab_logs(log_data, hook, aes_key, data_lock)
-                if data.get("challenge_type") == "membership":
-                    index = data.get("log_index")
+            async with challenge_lock:
+                try:
+                    proof: dict[str, str | list[str] | list[int] | dict[int, str]]
+                    mtree = await grab_logs(log_data, hook, aes_key, data_lock)
+                    if data.get("challenge_type") == "membership":
+                        index = data.get("log_index")
 
-                    membership_proof = mtree.membership_proof(index)
-                    proof = {
-                        "type": "proof",
-                        "proof_type": "membership",
-                        "proof": membership_proof,
-                        "indices": [index],
-                    }
-                elif data.get("challenge_type") == "consistency":
-                    point1 = data.get("previous_size")
-                    point2 = data.get("current_size")
-                    consistency_proof = mtree.consistency_proof(point1, point2)
-                    proof = {
-                        "type": "proof",
-                        "proof_type": "consistency",
-                        "proof": consistency_proof,
-                        "indices": [point1, point2],
-                    }
-                else:
-                    raise ValueError("Unknown challenge type")
+                        membership_proof = mtree.membership_proof(index)
+                        proof = {
+                            "type": "proof",
+                            "proof_type": "membership",
+                            "proof": membership_proof,
+                            "indices": [index],
+                        }
+                    elif data.get("challenge_type") == "consistency":
+                        point1 = data.get("previous_size")
+                        point2 = data.get("current_size")
+                        consistency_proof = mtree.consistency_proof(point1, point2)
+                        proof = {
+                            "type": "proof",
+                            "proof_type": "consistency",
+                            "proof": consistency_proof,
+                            "indices": [point1, point2],
+                        }
+                    else:
+                        raise ValueError("Unknown challenge type")
 
-                await websocket.send(json.dumps(proof))
-            except Exception as e:
-                await websocket.send(
-                    json.dumps({"type": "error", "description": f"{e}"})
-                )
+                    await websocket.send(json.dumps(proof))
+                except Exception as e:
+                    await websocket.send(
+                        json.dumps({"type": "error", "description": f"{e}"})
+                    )
