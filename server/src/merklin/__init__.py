@@ -2,6 +2,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 import cryptography.exceptions
+import uvicorn
 
 import firebase_admin.auth as auth
 import firebase_admin.credentials as credentials
@@ -204,3 +205,6 @@ async def signin() -> HTMLResponse:
     html_content = (Path(__file__).parent / "signin.html").read_text()
     return HTMLResponse(content=html_content)
 
+
+def main():
+    uvicorn.run(app, host="0.0.0.0", port=8000)
