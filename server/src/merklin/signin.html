@@ -44,19 +44,45 @@
         }
         .token-box {
             background-color: #f9f9f9;
-            padding: 10px;
+            padding: 6px 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
             word-break: break-all;
+            overflow-wrap: anywhere;
             font-size: 12px;
+            display: flex;
+            align-items: center;
+            min-height: 34px;
         }
-        #copyBtn {
+        #tokenText {
+            flex: 1 1 auto;
+            min-width: 0; /* allow overflow-hidden to work inside flex */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: block;
+        }
+        .copy-inline-btn {
+            margin-left: 8px;
+            width: 24px;
+            height: 24px;
+            padding: 0;
             background-color: #34A853;
-            width: auto;
-            padding: 8px 16px;
-            margin-top: 10px;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex: 0 0 auto;
         }
-        #copyBtn:hover {
+        .copy-inline-btn svg {
+            display: block;
+            width: 12px;
+            height: 12px;
+        }
+        .copy-inline-btn:hover {
             background-color: #2d8659;
         }
     </style>
@@ -69,8 +95,15 @@
         
         <div id="tokenDisplay">
             <h3>Access Token:</h3>
-            <div class="token-box" id="tokenText"></div>
-            <button id="copyBtn">Copy Token</button>
+            <div class="token-box">
+                <div id="tokenText"></div>
+                <button id="copyBtn" class="copy-inline-btn" title="Copy full token" aria-label="Copy token">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1z" fill="currentColor"/>
+                        <path d="M20 5H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h12v14z" fill="currentColor"/>
+                    </svg>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -107,19 +140,24 @@
         });
 
         copyBtn.addEventListener('click', () => {
-            navigator.clipboard.writeText(tokenText.textContent);
+            const full = copyBtn.dataset.fullToken || tokenText.textContent;
+            navigator.clipboard.writeText(full);
             alert('Token copied to clipboard!');
         });
 
         auth.onAuthStateChanged(async (user) => {
             if (user) {
-                const token = await user.getIdToken();
-                tokenText.textContent = token;
+                    const token = await user.getIdToken();
+                    // Display a truncated preview (first ~20 chars) but keep full token for copy
+                    const preview = token.length > 60 ? token.slice(0, 60) + '...' : token;
+                    tokenText.textContent = preview;
+                    copyBtn.dataset.fullToken = token;
                 tokenDisplay.style.display = 'block';
                 signInBtn.style.display = 'none';
                 signOutBtn.style.display = 'block';
             } else {
                 tokenDisplay.style.display = 'none';
+                    delete copyBtn.dataset.fullToken;
                 signInBtn.style.display = 'block';
                 signOutBtn.style.display = 'none';
             }
