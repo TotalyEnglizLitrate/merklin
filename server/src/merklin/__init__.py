@@ -131,11 +131,14 @@ async def log_ws_endpoint(
                     outstanding_proof = connection.tree.membership_proof(
                         connection.outstanding_challenge
                     )
-                    for client, srv in zip(proof, outstanding_proof):
+                    for idx, (client, srv) in enumerate(zip(proof, outstanding_proof)):
                         if client != srv:
                             print(
                                 f"Tampering detected! Challenge: {connection.outstanding_challenge}"
                             )
+                            print(f"Expected {srv} at {idx=}, got {client}")
+                            print(f"Expected: {outstanding_proof}")
+                            print(f"Got: {proof}")
                             break
 
                 elif proof_type == "consistency":
@@ -144,10 +147,18 @@ async def log_ws_endpoint(
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
 
                     for idx, hash in outstanding_proof.items():
-                        if proof.get(idx) != hash:
+                        client_proof = proof.get(str(idx)) # convert to string because json
+                        if client_proof != hash:
                             print(
                                 f"Tampering detected! Challenge: {connection.outstanding_challenge}"
                             )
+                            if client_proof is None:
+                                print(f"Expected proof to include {idx=}")
+                            else:
+                                print(f"Expected {hash} at {idx=}, got {client_proof}")
+
+                            print(f"Expected: {outstanding_proof}")
+                            print(f"Got: {proof}")
                             break
                 else:
                     raise ValueError("Invalid proof type")
