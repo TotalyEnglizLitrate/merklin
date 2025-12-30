@@ -41,15 +41,20 @@ class HookLogs(TextIO):
             asyncio.run_coroutine_threadsafe(self.on_write(self, data, pos), self.loop)
             return self.capture.write(data)
 
-
     def flush(self) -> None:
         with self.write_lock:
             return self.capture.flush()
+
+    def read(self, size=-1, /) -> str:
+        return self.capture.read(size)
 
     def close(self) -> None:
         if hasattr(self, "on_close"):
             self.on_close()
         return self.capture.close()
+
+    def seek(self, pos: int, whence: int = 0, /):
+        return self.capture.seek(pos, whence)
 
     def __getattr__(self, name: str):
         return getattr(self.capture, name)
@@ -93,7 +98,6 @@ def hook_logs(capture: TextIO) -> TextIO:
     def on_close() -> None:
         if shutdown_event is not None:
             loop.call_soon_threadsafe(shutdown_event.set)
-        thread.join()
 
     hook.on_close = on_close
     return hook
@@ -133,7 +137,9 @@ async def send_logs(
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
-                handle_challenge(websocket, hook, data, aes_key, data_lock, challenge_lock)
+                handle_challenge(
+                    websocket, hook, data, aes_key, data_lock, challenge_lock
+                )
             )
 
             while True:
@@ -194,7 +200,9 @@ def encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
     return aes.encrypt(nonce, data, None)
 
 
-async def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes, data_lock: asyncio.Lock) -> MerkleTree:
+async def grab_logs(
+    data: list[LogData], hook: HookLogs, aes_key: bytes, data_lock: asyncio.Lock
+) -> MerkleTree:
     mtree = MerkleTree()
     async with data_lock:
         data = data.copy()
@@ -202,8 +210,9 @@ async def grab_logs(data: list[LogData], hook: HookLogs, aes_key: bytes, data_lo
     with hook.write_lock:
         for log_data in data:
             hook.seek(log_data.begin_offset)
-            log = encrypt(aes_key, log_data.nonce, hook.read(log_data.length).encode())
-            mtree.add_log(log)
+            log = hook.read(log_data.length)
+            enc_log = encrypt(aes_key, log_data.nonce, log.encode())
+            mtree.add_log(enc_log)
     return mtree
 
 
@@ -233,7 +242,6 @@ async def handle_challenge(
                     mtree = await grab_logs(log_data, hook, aes_key, data_lock)
                     if data.get("challenge_type") == "membership":
                         index = data.get("log_index")
-
                         membership_proof = mtree.membership_proof(index)
                         proof = {
                             "type": "proof",
@@ -253,9 +261,10 @@ async def handle_challenge(
                         }
                     else:
                         raise ValueError("Unknown challenge type")
-
+                    
                     await websocket.send(json.dumps(proof))
                 except Exception as e:
                     await websocket.send(
                         json.dumps({"type": "error", "description": f"{e}"})
                     )
+                    raise
