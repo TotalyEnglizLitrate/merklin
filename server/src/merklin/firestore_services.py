@@ -75,7 +75,8 @@ async def get_session(db: AsyncClient, uid: str) -> int:
             "uid": uid,
             "is_session": True,
             "last_session": ret,
-        }
+        },
+        merge=ret != 1,
     )
 
     return ret
