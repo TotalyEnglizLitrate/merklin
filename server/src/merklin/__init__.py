@@ -20,6 +20,7 @@ from .alerts import alert, make_mail
 
 import asyncio
 import json
+import logging
 import random
 
 from contextlib import asynccontextmanager
@@ -30,6 +31,8 @@ from typing import cast
 
 import secrets
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,6 +40,7 @@ async def lifespan(app: FastAPI):
         Path(__file__).parent.parent.parent / "merklin-id-firebase.json"
     )
     app.state.firebase_app = initialize_app(cred)
+    logger.info("Firebase app initialized")
     app.state.conn_manager = ConnectionManager()
     app.state.db = cast(
         AsyncClient,
@@ -44,16 +48,20 @@ async def lifespan(app: FastAPI):
             app.state.firebase_app
         ),
     )
+    logger.info("Firestore client initialized")
     email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
     app.state.email_queue = email_queue
     email_task = asyncio.create_task(alert(email_queue))
+    logger.info("Email alert task started")
     yield
+    logger.info("Shutting down application")
     app.state.db.close()
     email_task.cancel()
     try:
         await email_task
     except asyncio.CancelledError:
         pass
+    logger.info("Application shutdown complete")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -89,11 +97,12 @@ class ConnectionManager:
 async def verify_token(websocket: WebSocket) -> dict[str, str]:
     token = websocket.query_params.get("token")
     if token is None:
+        logger.warning("WebSocket connection attempted without token")
         raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
     try:
         return cast(dict[str, str], auth.verify_id_token(token))  # type: ignore
     except Exception as e:
-        print(f"Token Verification error: {e}")
+        logger.error(f"Token verification failed: {e}")
         raise
 
 
@@ -107,6 +116,7 @@ async def log_ws_endpoint(
     conn_manager: ConnectionManager = websocket.app.state.conn_manager
     uid = decoded_token["uid"]
     client_email = decoded_token["email"]
+    logger.info(f"WebSocket connection established for user {uid}")
     connection = conn_manager.add_connection(
         websocket,
         uid,
@@ -115,6 +125,7 @@ async def log_ws_endpoint(
             serialization.load_pem_public_key(bytes.fromhex(public_key)),
         ),
     )
+    logger.debug(f"Connection added for user {uid}")
     challenger = asyncio.create_task(challenge_subroutine(connection))
 
     email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.email_queue
@@ -126,12 +137,15 @@ async def log_ws_endpoint(
                 data = message.get("data")
                 signature = message.get("signature")
                 if data is None or signature is None:
+                    logger.warning(f"Log message from {uid} missing data or signature")
                     await websocket.send_json(
                         {"type": "error", "error": "Missing log data or signature"}
                     )
                     continue
+                logger.debug(f"Processing log {counter} from user {uid}")
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
                 await add_log(websocket.app.state.db, data, counter, uid)
+                logger.debug(f"Log {counter} stored successfully for user {uid}")
                 counter += 1
             elif msg_type == "proof":
                 # Access logs: enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
@@ -140,11 +154,13 @@ async def log_ws_endpoint(
                 outstanding_proof = None
                 if proof_type == "membership":
                     assert isinstance(connection.outstanding_challenge, int)
+                    logger.debug(f"Verifying membership proof for user {uid}, challenge index: {connection.outstanding_challenge}")
                     outstanding_proof = connection.tree.membership_proof(
                         connection.outstanding_challenge
                     )
                     for idx, (client, srv) in enumerate(zip(proof, outstanding_proof)):
                         if client != srv:
+                            logger.error(f"Tampering detected in membership proof for user {uid}")
                             warning = (
                                 f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                                 f"Expected {srv} at {idx=}, got {client}\n"
@@ -155,10 +171,13 @@ async def log_ws_endpoint(
                                 make_mail(client_email, proof_type, warning)
                             )
                             break
+                    else:
+                        logger.debug(f"Membership proof verified successfully for user {uid}")
 
                 elif proof_type == "consistency":
                     assert isinstance(connection.outstanding_challenge, tuple)
                     size1, size2 = connection.outstanding_challenge
+                    logger.debug(f"Verifying consistency proof for user {uid}, sizes: {size1} -> {size2}")
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
 
                     for idx, hash in outstanding_proof.items():
@@ -166,6 +185,7 @@ async def log_ws_endpoint(
                             str(idx)
                         )  # convert to string - json stores keys as strings
                         if client_proof != hash:
+                            logger.error(f"Tampering detected in consistency proof for user {uid}")
                             warning = f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                             if client_proof is None:
                                 warning += f"Expected proof to include {idx=}\n"
@@ -178,26 +198,34 @@ async def log_ws_endpoint(
                                 make_mail(client_email, proof_type, warning)
                             )
                             break
+                    else:
+                        logger.debug(f"Consistency proof verified successfully for user {uid}")
                 else:
+                    logger.error(f"Invalid proof type received from user {uid}: {proof_type}")
                     raise ValueError("Invalid proof type")
 
             else:
+                logger.warning(f"Unknown message type from user {uid}: {msg_type}")
                 await websocket.send_json(
                     {"type": "error", "error": "Unknown message type"}
                 )
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        logger.info(f"WebSocket disconnected for user {uid}")
     except WebSocketException as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error for user {uid}: {e}")
     except json.JSONDecodeError:
+        logger.warning(f"Invalid JSON format received from user {uid}")
         await websocket.send_json({"type": "error", "error": "Invalid JSON format"})
     except cryptography.exceptions.InvalidSignature:
+        logger.warning(f"Invalid signature on log from user {uid}")
         await websocket.send_json({"type": "error", "error": "Invalid log signature"})
     except Exception as e:
+        logger.exception(f"Unexpected error for user {uid}")
         await websocket.send_json(
             {"type": "error", "error": f"Internal server error: {e}"}
         )
     finally:
+        logger.info(f"Closing connection for user {uid}")
         await conn_manager.remove_connection(uid)
         challenger.cancel()
         try:
@@ -234,6 +262,7 @@ async def challenge_subroutine(connection: Connection):
                     "log_index": log_index,
                 }
                 connection.outstanding_challenge = log_index
+                logger.debug(f"Sending membership challenge for index {log_index}")
             else:
                 size2 = secrets.randbelow(len(connection.tree.leaves) - 1) + 1
                 size1 = secrets.randbelow(size2)
@@ -245,11 +274,14 @@ async def challenge_subroutine(connection: Connection):
                     "current_size": size2,
                 }
                 connection.outstanding_challenge = (size1, size2)
+                logger.debug(f"Sending consistency challenge for sizes {size1} -> {size2}")
             try:
                 await connection.websocket.send_json(challenge)
-            except (WebSocketDisconnect, WebSocketException):
+            except (WebSocketDisconnect, WebSocketException) as e:
+                logger.debug(f"Challenge subroutine stopped: {e.__class__.__name__}")
                 break
     except asyncio.CancelledError:
+        logger.debug("Challenge subroutine cancelled")
         pass
 
 
@@ -260,4 +292,9 @@ async def signin() -> HTMLResponse:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    logger.info("Starting Merklin server on 0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)

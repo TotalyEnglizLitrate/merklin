@@ -1,5 +1,5 @@
 from asyncio import Queue
-
+import logging
 from email.message import EmailMessage
 from aiosmtplib import SMTP
 import os
@@ -7,11 +7,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PSWD = os.getenv("EMAIL_PASSWORD")
 
 
 def make_mail(to: str, type: str, warning: str) -> EmailMessage:
+    logger.debug(f"Creating alert email for {to} with type {type}")
     mail = EmailMessage()
     mail["Subject"] = "Merklin alert: Tampered Logs Found."
     mail["From"] = EMAIL_USER
@@ -53,10 +56,9 @@ async def alert(queue: Queue[EmailMessage]) -> None:
         use_tls=True,
     )
 
-    if not EMAIL_USER:
-        raise RuntimeError("EMAIL_USER is not set")
-    if not EMAIL_PSWD:
-        raise RuntimeError("EMAIL_PASSWORD is not set")
+    if EMAIL_USER is None or EMAIL_PSWD is None:
+        logger.error("Email credentials not found!")
+        raise RuntimeError("Email credentials not set in environment")
 
     await smtp.connect()
     await smtp.login(EMAIL_USER, EMAIL_PSWD)
