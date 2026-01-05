@@ -1,5 +1,8 @@
-import logging
 from google.cloud.firestore_v1.async_client import AsyncClient
+
+import logging
+
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ async def add_log(
 
 async def get_log_by_index(
     db: AsyncClient, uid: str, log_index: int, session: int
-) -> dict[str, str | int | bytes] | None:
+) -> dict[str, str | int] | None:
     query = (
         db.collection("logs")
         .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
@@ -44,6 +47,20 @@ async def get_log_by_index(
     except Exception as e:
         logger.error(f"Failed to retrieve log for user {uid} at index {log_index}: {e}")
         raise
+
+
+async def get_logs_by_session(
+    db: AsyncClient, uid: str, session: int
+) -> list[dict[str, str | int]]:
+    query = (
+        db.collection("logs")
+        .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
+        .where("session", "==", session)
+    )
+
+    return cast(
+        list[dict[str, str | int]], [doc.to_dict() async for doc in query.stream()]
+    )
 
 
 async def get_session(db: AsyncClient, uid: str) -> int:
