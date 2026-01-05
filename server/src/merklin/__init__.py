@@ -92,8 +92,7 @@ async def verify_token(websocket: WebSocket) -> dict[str, str]:
     if token is None:
         raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
     try:
-        decoded_token = auth.verify_id_token(token)  # type: ignore
-        return decoded_token
+        return cast(dict[str, str], auth.verify_id_token(token))  # type: ignore
     except Exception as e:
         print(f"Token Verification error: {e}")
         raise
