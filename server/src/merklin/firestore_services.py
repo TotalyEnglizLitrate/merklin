@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 
 async def add_log(
-    db: AsyncClient, encrypted_data: str, log_index: int, uid: str
+    db: AsyncClient, encrypted_data: str, log_index: int, uid: str, session: int
 ) -> None:
     try:
         await db.collection(
@@ -15,6 +15,7 @@ async def add_log(
                 "uid": uid,
                 "encrypted_message": encrypted_data,
                 "log_index": log_index,
+                "session": session,
             }
         )
         logger.debug(f"Log stored for user {uid} at index {log_index}")
@@ -24,12 +25,13 @@ async def add_log(
 
 
 async def get_log_by_index(
-    db: AsyncClient, uid: str, log_index: int
+    db: AsyncClient, uid: str, log_index: int, session: int
 ) -> dict[str, str | int | bytes] | None:
     query = (
         db.collection("logs")
         .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
-        .where("merkle_index", "==", log_index)
+        .where("log_index", "==", log_index)
+        .where("session", "==", session)
         .limit(1)
     )
     try:
@@ -42,3 +44,39 @@ async def get_log_by_index(
     except Exception as e:
         logger.error(f"Failed to retrieve log for user {uid} at index {log_index}: {e}")
         raise
+
+
+async def get_session(db: AsyncClient, uid: str) -> int:
+    query = (
+        db.collection("logs")
+        .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
+        .where("is_session", "==", True)
+        .limit(1)
+    )
+    try:
+        result = (await anext(query.stream())).to_dict()
+        if result is None:
+            ret = 1
+        else:
+            ret = result["last_session"] + 1
+        logger.debug(f"Session retrieved for user {uid}")
+        logger.debug(f"Current session for user {uid} is {ret}")
+    except StopAsyncIteration as e:
+        ret = 1
+        logger.debug(f"No session found for user {uid}, defaulting to 1")
+    except Exception as e:
+        logger.error(f"Failed to retrieve session for user {uid}: {e}")
+        raise
+
+    await db.collection(
+        "logs"
+    ).document().set(  # pyright: ignore[reportUnknownMemberType]
+        {
+            "uid": uid,
+            "is_session": True,
+            "last_session": ret,
+        },
+        merge=ret != 1,
+    )
+
+    return ret
