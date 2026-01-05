@@ -29,7 +29,7 @@ async def get_log_by_index(
     query = (
         db.collection("logs")
         .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
-        .where("merkle_index", "==", log_index)
+        .where("log_index", "==", log_index)
         .limit(1)
     )
     try:
