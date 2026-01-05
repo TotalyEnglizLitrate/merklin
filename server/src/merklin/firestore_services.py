@@ -2,7 +2,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 import logging
 
-from typing import cast
+from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +51,19 @@ async def get_log_by_index(
 
 async def get_logs_by_session(
     db: AsyncClient, uid: str, session: int
-) -> list[dict[str, str | int]]:
+) -> AsyncGenerator[tuple[str, int], None]:
     query = (
         db.collection("logs")
         .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
         .where("session", "==", session)
     )
 
-    return cast(
-        list[dict[str, str | int]], [doc.to_dict() async for doc in query.stream()]
-    )
+    async for doc in query.stream():
+        doc_dict = doc.to_dict()
+        if doc_dict is not None:
+            yield (doc_dict["encrypted_message"], doc_dict["log_index"])
+        else:
+            raise RuntimeError("Log document is None - this should not happen")
 
 
 async def get_session(db: AsyncClient, uid: str) -> int:
