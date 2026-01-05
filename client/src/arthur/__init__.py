@@ -158,12 +158,10 @@ async def send_logs(
                 except asyncio.TimeoutError:
                     continue
 
-                # AES Encryption
                 async with data_lock:
                     data.append(log_data)
                 enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
 
-                # signature
                 signature = private_key.sign(
                     enc_log,
                     padding.PSS(
@@ -261,7 +259,7 @@ async def handle_challenge(
                         }
                     else:
                         raise ValueError("Unknown challenge type")
-                    
+
                     await websocket.send(json.dumps(proof))
                 except Exception as e:
                     await websocket.send(

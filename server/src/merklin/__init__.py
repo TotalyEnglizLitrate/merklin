@@ -16,6 +16,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 from merkle_tree import MerkleTree
 from .firestore_services import add_log
+from .alerts import alert, make_mail
 
 import asyncio
 import json
@@ -23,6 +24,7 @@ import random
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from email.message import EmailMessage
 from pathlib import Path
 from typing import cast
 
@@ -42,8 +44,16 @@ async def lifespan(app: FastAPI):
             app.state.firebase_app
         ),
     )
+    email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
+    app.state.email_queue = email_queue
+    email_task = asyncio.create_task(alert(email_queue))
     yield
     app.state.db.close()
+    email_task.cancel()
+    try:
+        await email_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -64,7 +74,6 @@ class ConnectionManager:
     def add_connection(
         self, websocket: WebSocket, uid: str, public_key: rsa.RSAPublicKey
     ) -> Connection:
-        # TODO: Check if the logger is registered
         self.active_connections[uid] = Connection(websocket, MerkleTree(), public_key)
         return self.active_connections[uid]
 
@@ -77,14 +86,12 @@ class ConnectionManager:
         return uid in self.active_connections
 
 
-async def verify_token(websocket: WebSocket) -> str:
+async def verify_token(websocket: WebSocket) -> dict[str, str]:
     token = websocket.query_params.get("token")
     if token is None:
         raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
     try:
-        decoded_token = auth.verify_id_token(token)  # type: ignore
-        uid = cast(str, decoded_token["uid"])
-        return uid
+        return cast(dict[str, str], auth.verify_id_token(token))  # type: ignore
     except Exception as e:
         print(f"Token Verification error: {e}")
         raise
@@ -92,10 +99,14 @@ async def verify_token(websocket: WebSocket) -> str:
 
 @app.websocket("/log")
 async def log_ws_endpoint(
-    websocket: WebSocket, public_key: str, uid: str = Depends(verify_token)
+    websocket: WebSocket,
+    public_key: str,
+    decoded_token: dict[str, str] = Depends(verify_token),
 ):
     await websocket.accept()
     conn_manager: ConnectionManager = websocket.app.state.conn_manager
+    uid = decoded_token["uid"]
+    client_email = decoded_token["email"]
     connection = conn_manager.add_connection(
         websocket,
         uid,
@@ -105,6 +116,8 @@ async def log_ws_endpoint(
         ),
     )
     challenger = asyncio.create_task(challenge_subroutine(connection))
+
+    email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.email_queue
     counter = 0
     try:
         async for message in websocket.iter_json():
@@ -121,8 +134,7 @@ async def log_ws_endpoint(
                 await add_log(websocket.app.state.db, data, counter, uid)
                 counter += 1
             elif msg_type == "proof":
-                # TODO: verify outstanding proof
-                # enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
+                # Access logs: enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
                 proof_type = message.get("proof_type")
                 proof = message.get("proof")
                 outstanding_proof = None
@@ -133,12 +145,15 @@ async def log_ws_endpoint(
                     )
                     for idx, (client, srv) in enumerate(zip(proof, outstanding_proof)):
                         if client != srv:
-                            print(
-                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
+                            warning = (
+                                f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
+                                f"Expected {srv} at {idx=}, got {client}\n"
+                                f"Expected: {outstanding_proof}\n"
+                                f"Got: {proof}\n"
                             )
-                            print(f"Expected {srv} at {idx=}, got {client}")
-                            print(f"Expected: {outstanding_proof}")
-                            print(f"Got: {proof}")
+                            await email_queue.put(
+                                make_mail(client_email, proof_type, warning)
+                            )
                             break
 
                 elif proof_type == "consistency":
@@ -147,18 +162,21 @@ async def log_ws_endpoint(
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
 
                     for idx, hash in outstanding_proof.items():
-                        client_proof = proof.get(str(idx)) # convert to string because json
+                        client_proof = proof.get(
+                            str(idx)
+                        )  # convert to string - json stores keys as strings
                         if client_proof != hash:
-                            print(
-                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
-                            )
+                            warning = f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                             if client_proof is None:
-                                print(f"Expected proof to include {idx=}")
+                                warning += f"Expected proof to include {idx=}\n"
                             else:
-                                print(f"Expected {hash} at {idx=}, got {client_proof}")
-
-                            print(f"Expected: {outstanding_proof}")
-                            print(f"Got: {proof}")
+                                warning += (
+                                    f"Expected {hash} at {idx=}, got {client_proof}\n"
+                                )
+                            warning += f"Expected: {outstanding_proof}\nGot: {proof}\n"
+                            await email_queue.put(
+                                make_mail(client_email, proof_type, warning)
+                            )
                             break
                 else:
                     raise ValueError("Invalid proof type")
@@ -209,7 +227,6 @@ async def challenge_subroutine(connection: Connection):
             challenge_type = random.choice(["membership", "consistency"])
             challenge: dict[str, int | str]
             if challenge_type == "membership":
-                # Dummy challenge for membership proof - implement random log selection
                 log_index = secrets.randbelow(len(connection.tree.leaves))
                 challenge = {
                     "type": "challenge",
@@ -218,7 +235,6 @@ async def challenge_subroutine(connection: Connection):
                 }
                 connection.outstanding_challenge = log_index
             else:
-                # Dummy challenge for consistency proof - implement random tree size selection
                 size2 = secrets.randbelow(len(connection.tree.leaves) - 1) + 1
                 size1 = secrets.randbelow(size2)
                 size1, size2 = sorted((size2, size1))
