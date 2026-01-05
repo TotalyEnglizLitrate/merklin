@@ -68,6 +68,11 @@ async def alert(queue: Queue[EmailMessage]) -> None:
         use_tls=True,
     )
 
+    if not EMAIL_USER:
+        raise RuntimeError("EMAIL_USER is not set")
+    if not EMAIL_PSWD:
+        raise RuntimeError("EMAIL_PASSWORD is not set")
+
     await smtp.connect()
     await smtp.login(EMAIL_USER, EMAIL_PSWD)
 
@@ -79,10 +84,3 @@ async def alert(queue: Queue[EmailMessage]) -> None:
             print("Email send failed:", e)
         finally:
             queue.task_done()
-
-
-def validate_email_config() -> None:
-    if not EMAIL_USER:
-        raise RuntimeError("EMAIL_USER is not set")
-    if not EMAIL_PSWD:
-        raise RuntimeError("EMAIL_PASSWORD is not set")
