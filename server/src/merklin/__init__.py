@@ -16,6 +16,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 from merkle_tree import MerkleTree
 from .firestore_services import add_log
+from .alerts import alert, make_mail
 
 import asyncio
 import json
@@ -23,13 +24,11 @@ import random
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from email.message import EmailMessage
 from pathlib import Path
 from typing import cast
 
 import secrets
-
-from email.message import EmailMessage
-from alerts import make_mail, alert
 
 
 @asynccontextmanager
