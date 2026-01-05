@@ -115,27 +115,3 @@ def make_session_alert(to: str, session: int) -> EmailMessage:
     mail.add_alternative(html_content, subtype="html")
 
     return mail
-
-
-async def session_alert(queue: Queue[EmailMessage]) -> None:
-    smtp = SMTP(
-        hostname="smtp.gmail.com",
-        port=465,
-        use_tls=True,
-    )
-
-    if EMAIL_USER is None or EMAIL_PSWD is None:
-        logger.error("Email credentials not found!")
-        raise RuntimeError("Email credentials not set in environment")
-
-    await smtp.connect()
-    await smtp.login(EMAIL_USER, EMAIL_PSWD)
-
-    while True:
-        msg = await queue.get()
-        try:
-            await smtp.send_message(msg)
-        except Exception as e:
-            print("Email send failed:", e)
-        finally:
-            queue.task_done()

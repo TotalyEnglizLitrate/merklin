@@ -16,7 +16,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 from merkle_tree import MerkleTree
 from .firestore_services import add_log, get_session
-from .alerts import alert, make_alert, make_session_alert, session_alert
+from .alerts import alert, make_alert, make_session_alert
 
 import asyncio
 import json
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     app.state.alert_email_queue = alert_email_queue
     app.state.session_alert_email_queue = session_alert_email_queue
     alert_email_task = asyncio.create_task(alert(alert_email_queue))
-    session_email_task = asyncio.create_task(session_alert(session_alert_email_queue))
+    session_email_task = asyncio.create_task(alert(session_alert_email_queue))
     logger.info("Email alert task started")
     yield
     logger.info("Shutting down application")
@@ -145,7 +145,9 @@ async def log_ws_endpoint(
     logger.debug(f"Connection added for user {uid}")
     challenger = asyncio.create_task(challenge_subroutine(connection))
 
-    alert_email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.alert_email_queue
+    alert_email_queue: asyncio.Queue[EmailMessage] = (
+        websocket.app.state.alert_email_queue
+    )
     counter = 0
     try:
         async for message in websocket.iter_json():
