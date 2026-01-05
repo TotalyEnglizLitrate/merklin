@@ -15,7 +15,7 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 from merkle_tree import MerkleTree
-from .firestore_services import add_log, get_session
+from .firestore_services import add_log, get_session, get_logs_by_session
 from .alerts import alert, make_alert, make_session_alert
 
 import asyncio
@@ -350,6 +350,14 @@ async def signin() -> HTMLResponse:
     html_content = (Path(__file__).parent / "signin.html").read_text()
     return HTMLResponse(content=html_content)
 
+@app.get("/session-logs/{session_id}")
+async def get_session_logs(session_id: int, decoded_token: dict[str, str] = Depends(verify_token)) -> list[dict[str, str | int]]:
+    uid = decoded_token["uid"]
+    db: AsyncClient = app.state.db
+    logs: list[dict[str, str | int]] = []
+    async for encrypted_message, log_index in get_logs_by_session(db, uid, session_id):
+        logs.append({"encrypted_message": encrypted_message, "log_index": log_index})
+    return logs
 
 def main():
     logging.basicConfig(
