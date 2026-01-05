@@ -15,8 +15,8 @@ from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 from merkle_tree import MerkleTree
-from .firestore_services import add_log
-from .alerts import alert, make_mail
+from .firestore_services import add_log, get_session
+from .alerts import alert, make_alert, make_session_alert, session_alert
 
 import asyncio
 import json
@@ -49,16 +49,21 @@ async def lifespan(app: FastAPI):
         ),
     )
     logger.info("Firestore client initialized")
-    email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
-    app.state.email_queue = email_queue
-    email_task = asyncio.create_task(alert(email_queue))
+    alert_email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
+    session_alert_email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
+    app.state.alert_email_queue = alert_email_queue
+    app.state.session_alert_email_queue = session_alert_email_queue
+    alert_email_task = asyncio.create_task(alert(alert_email_queue))
+    session_email_task = asyncio.create_task(session_alert(session_alert_email_queue))
     logger.info("Email alert task started")
     yield
     logger.info("Shutting down application")
     app.state.db.close()
-    email_task.cancel()
+    alert_email_task.cancel()
+    session_email_task.cancel()
     try:
-        await email_task
+        await alert_email_task
+        await session_email_task
     except asyncio.CancelledError:
         pass
     logger.info("Application shutdown complete")
@@ -113,10 +118,22 @@ async def log_ws_endpoint(
     decoded_token: dict[str, str] = Depends(verify_token),
 ):
     await websocket.accept()
+
     conn_manager: ConnectionManager = websocket.app.state.conn_manager
     uid = decoded_token["uid"]
     client_email = decoded_token["email"]
+
     logger.info(f"WebSocket connection established for user {uid}")
+
+    session = await get_session(websocket.app.state.db, uid)
+    session_alert_email_queue: asyncio.Queue[EmailMessage] = (
+        websocket.app.state.session_alert_email_queue
+    )
+    logger.info(f"Starting session {session} for user {uid}")
+
+    await session_alert_email_queue.put(make_session_alert(client_email, session))
+    logger.info(f"Session alert email sent for user {uid}, session {session}")
+
     connection = conn_manager.add_connection(
         websocket,
         uid,
@@ -128,56 +145,77 @@ async def log_ws_endpoint(
     logger.debug(f"Connection added for user {uid}")
     challenger = asyncio.create_task(challenge_subroutine(connection))
 
-    email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.email_queue
+    alert_email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.alert_email_queue
     counter = 0
     try:
         async for message in websocket.iter_json():
             msg_type = message.get("type")
+
             if msg_type == "log":
                 data = message.get("data")
                 signature = message.get("signature")
+
                 if data is None or signature is None:
                     logger.warning(f"Log message from {uid} missing data or signature")
                     await websocket.send_json(
                         {"type": "error", "error": "Missing log data or signature"}
                     )
                     continue
+
                 logger.debug(f"Processing log {counter} from user {uid}")
                 process_log(bytes.fromhex(data), bytes.fromhex(signature), connection)
-                await add_log(websocket.app.state.db, data, counter, uid)
+                await add_log(websocket.app.state.db, data, counter, uid, session)
                 logger.debug(f"Log {counter} stored successfully for user {uid}")
                 counter += 1
+
             elif msg_type == "proof":
                 # Access logs: enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
                 proof_type = message.get("proof_type")
                 proof = message.get("proof")
                 outstanding_proof = None
+                disconnect = False
+
                 if proof_type == "membership":
                     assert isinstance(connection.outstanding_challenge, int)
-                    logger.debug(f"Verifying membership proof for user {uid}, challenge index: {connection.outstanding_challenge}")
+                    logger.debug(
+                        f"Verifying membership proof for user {uid}, challenge index: {connection.outstanding_challenge}"
+                    )
                     outstanding_proof = connection.tree.membership_proof(
                         connection.outstanding_challenge
                     )
+
                     for idx, (client, srv) in enumerate(zip(proof, outstanding_proof)):
                         if client != srv:
-                            logger.error(f"Tampering detected in membership proof for user {uid}")
+                            logger.error(
+                                f"Tampering detected in membership proof for user {uid}"
+                            )
+                            disconnect = True
+
                             warning = (
                                 f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                                 f"Expected {srv} at {idx=}, got {client}\n"
                                 f"Expected: {outstanding_proof}\n"
                                 f"Got: {proof}\n"
                             )
-                            await email_queue.put(
-                                make_mail(client_email, proof_type, warning)
+
+                            await alert_email_queue.put(
+                                make_alert(client_email, proof_type, warning, session)
+                            )
+                            logger.info(
+                                f"Alert email sent for {uid=}, {session=} regarding membership proof tampering"
                             )
                             break
                     else:
-                        logger.debug(f"Membership proof verified successfully for user {uid}")
+                        logger.debug(
+                            f"Membership proof verified successfully for user {uid}"
+                        )
 
                 elif proof_type == "consistency":
                     assert isinstance(connection.outstanding_challenge, tuple)
                     size1, size2 = connection.outstanding_challenge
-                    logger.debug(f"Verifying consistency proof for user {uid}, sizes: {size1} -> {size2}")
+                    logger.debug(
+                        f"Verifying consistency proof for user {uid}, sizes: {size1} -> {size2}"
+                    )
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
 
                     for idx, hash in outstanding_proof.items():
@@ -185,8 +223,13 @@ async def log_ws_endpoint(
                             str(idx)
                         )  # convert to string - json stores keys as strings
                         if client_proof != hash:
-                            logger.error(f"Tampering detected in consistency proof for user {uid}")
+                            logger.error(
+                                f"Tampering detected in consistency proof for user {uid}"
+                            )
+                            disconnect = True
+
                             warning = f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
+
                             if client_proof is None:
                                 warning += f"Expected proof to include {idx=}\n"
                             else:
@@ -194,14 +237,27 @@ async def log_ws_endpoint(
                                     f"Expected {hash} at {idx=}, got {client_proof}\n"
                                 )
                             warning += f"Expected: {outstanding_proof}\nGot: {proof}\n"
-                            await email_queue.put(
-                                make_mail(client_email, proof_type, warning)
+
+                            await alert_email_queue.put(
+                                make_alert(client_email, proof_type, warning, session)
                             )
                             break
+
+                        logger.info(
+                            f"Alert email sent for {uid=}, {session=} regarding consistency proof tampering"
+                        )
                     else:
-                        logger.debug(f"Consistency proof verified successfully for user {uid}")
+                        logger.debug(
+                            f"Consistency proof verified successfully for user {uid}"
+                        )
+
+                    if disconnect:
+                        await websocket.close()
+                        logger.info(f"Disconnected user {uid} due to proof tampering")
                 else:
-                    logger.error(f"Invalid proof type received from user {uid}: {proof_type}")
+                    logger.error(
+                        f"Invalid proof type received from user {uid}: {proof_type}"
+                    )
                     raise ValueError("Invalid proof type")
 
             else:
@@ -274,7 +330,9 @@ async def challenge_subroutine(connection: Connection):
                     "current_size": size2,
                 }
                 connection.outstanding_challenge = (size1, size2)
-                logger.debug(f"Sending consistency challenge for sizes {size1} -> {size2}")
+                logger.debug(
+                    f"Sending consistency challenge for sizes {size1} -> {size2}"
+                )
             try:
                 await connection.websocket.send_json(challenge)
             except (WebSocketDisconnect, WebSocketException) as e:
