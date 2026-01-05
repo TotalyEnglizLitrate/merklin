@@ -28,6 +28,9 @@ from typing import cast
 
 import secrets
 
+from email.message import EmailMessage
+from alerts import make_mail, alert
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,8 +45,16 @@ async def lifespan(app: FastAPI):
             app.state.firebase_app
         ),
     )
+    email_queue: asyncio.Queue[EmailMessage] = asyncio.Queue()
+    app.state.email_queue = email_queue
+    email_task = asyncio.create_task(alert(email_queue))
     yield
     app.state.db.close()
+    email_task.cancel()
+    try:
+        await email_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -77,14 +88,13 @@ class ConnectionManager:
         return uid in self.active_connections
 
 
-async def verify_token(websocket: WebSocket) -> str:
+async def verify_token(websocket: WebSocket) -> dict[str, str]:
     token = websocket.query_params.get("token")
     if token is None:
         raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
     try:
         decoded_token = auth.verify_id_token(token)  # type: ignore
-        uid = cast(str, decoded_token["uid"])
-        return uid
+        return decoded_token
     except Exception as e:
         print(f"Token Verification error: {e}")
         raise
@@ -92,10 +102,14 @@ async def verify_token(websocket: WebSocket) -> str:
 
 @app.websocket("/log")
 async def log_ws_endpoint(
-    websocket: WebSocket, public_key: str, uid: str = Depends(verify_token)
+    websocket: WebSocket,
+    public_key: str,
+    decoded_token: dict[str, str] = Depends(verify_token),
 ):
     await websocket.accept()
     conn_manager: ConnectionManager = websocket.app.state.conn_manager
+    uid = decoded_token["uid"]
+    client_email = decoded_token["email"]
     connection = conn_manager.add_connection(
         websocket,
         uid,
@@ -105,6 +119,8 @@ async def log_ws_endpoint(
         ),
     )
     challenger = asyncio.create_task(challenge_subroutine(connection))
+
+    email_queue: asyncio.Queue[EmailMessage] = websocket.app.state.email_queue
     counter = 0
     try:
         async for message in websocket.iter_json():
@@ -133,12 +149,15 @@ async def log_ws_endpoint(
                     )
                     for idx, (client, srv) in enumerate(zip(proof, outstanding_proof)):
                         if client != srv:
-                            print(
-                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
+                            warning = (
+                                f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
+                                f"Expected {srv} at {idx=}, got {client}\n"
+                                f"Expected: {outstanding_proof}\n"
+                                f"Got: {proof}\n"
                             )
-                            print(f"Expected {srv} at {idx=}, got {client}")
-                            print(f"Expected: {outstanding_proof}")
-                            print(f"Got: {proof}")
+                            await email_queue.put(
+                                make_mail(client_email, proof_type, warning)
+                            )
                             break
 
                 elif proof_type == "consistency":
@@ -147,18 +166,21 @@ async def log_ws_endpoint(
                     outstanding_proof = connection.tree.consistency_proof(size1, size2)
 
                     for idx, hash in outstanding_proof.items():
-                        client_proof = proof.get(str(idx)) # convert to string because json
+                        client_proof = proof.get(
+                            str(idx)
+                        )  # convert to string because json
                         if client_proof != hash:
-                            print(
-                                f"Tampering detected! Challenge: {connection.outstanding_challenge}"
-                            )
+                            warning = f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                             if client_proof is None:
-                                print(f"Expected proof to include {idx=}")
+                                warning += f"Expected proof to include {idx=}\n"
                             else:
-                                print(f"Expected {hash} at {idx=}, got {client_proof}")
-
-                            print(f"Expected: {outstanding_proof}")
-                            print(f"Got: {proof}")
+                                warning += (
+                                    f"Expected {hash} at {idx=}, got {client_proof}\n"
+                                )
+                            warning += f"Expected: {outstanding_proof}\nGot: {proof}\n"
+                            await email_queue.put(
+                                make_mail(client_email, proof_type, warning)
+                            )
                             break
                 else:
                     raise ValueError("Invalid proof type")

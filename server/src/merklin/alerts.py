@@ -11,28 +11,16 @@ EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PSWD = os.getenv("EMAIL_PASSWORD")
 
 
-def make_mail(
-    to: str, type: str, warning: str, encrypted_logs: list[str]
-) -> EmailMessage:
+def make_mail(to: str, type: str, warning: str) -> EmailMessage:
     mail = EmailMessage()
     mail["Subject"] = "Merklin alert: Tampered Logs Found."
     mail["From"] = EMAIL_USER
     mail["To"] = to
 
     # Plain-text fallback
-    text_content = (
-        f"Security Alert: {type}\n\n"
-        f"Warning:\n{warning}\n\n"
-        "Affected Encrypted Logs:\n" + "\n".join(encrypted_logs)
-    )
+    text_content = f"Security Alert: {type}\n\n" f"Warning:\n{warning}\n\n"
 
     mail.set_content(text_content)
-
-    logs_html = "".join(
-        f"<pre style='background:#f6f6f6;padding:8px;border:1px solid #ddd;'>"
-        f"{log}</pre>"
-        for log in encrypted_logs
-    )
 
     html_content = f"""
     <html>
@@ -43,9 +31,6 @@ def make_mail(
           <strong>Warning:</strong><br>
           {warning}
         </p>
-
-        <p><strong>Affected Encrypted Logs:</strong></p>
-        {logs_html}
 
         <hr style="margin-top: 20px;">
 
