@@ -74,7 +74,6 @@ class ConnectionManager:
     def add_connection(
         self, websocket: WebSocket, uid: str, public_key: rsa.RSAPublicKey
     ) -> Connection:
-        # TODO: Check if the logger is registered
         self.active_connections[uid] = Connection(websocket, MerkleTree(), public_key)
         return self.active_connections[uid]
 
@@ -135,8 +134,7 @@ async def log_ws_endpoint(
                 await add_log(websocket.app.state.db, data, counter, uid)
                 counter += 1
             elif msg_type == "proof":
-                # TODO: verify outstanding proof
-                # enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
+                # Access logs: enc_log = get_log_by_merkle_index(idx)["encrypted_message"]
                 proof_type = message.get("proof_type")
                 proof = message.get("proof")
                 outstanding_proof = None
@@ -166,7 +164,7 @@ async def log_ws_endpoint(
                     for idx, hash in outstanding_proof.items():
                         client_proof = proof.get(
                             str(idx)
-                        )  # convert to string because json
+                        )  # convert to string - json stores keys as strings
                         if client_proof != hash:
                             warning = f"Tampering detected! Challenge: {connection.outstanding_challenge}\n"
                             if client_proof is None:
@@ -229,7 +227,6 @@ async def challenge_subroutine(connection: Connection):
             challenge_type = random.choice(["membership", "consistency"])
             challenge: dict[str, int | str]
             if challenge_type == "membership":
-                # Dummy challenge for membership proof - implement random log selection
                 log_index = secrets.randbelow(len(connection.tree.leaves))
                 challenge = {
                     "type": "challenge",
@@ -238,7 +235,6 @@ async def challenge_subroutine(connection: Connection):
                 }
                 connection.outstanding_challenge = log_index
             else:
-                # Dummy challenge for consistency proof - implement random tree size selection
                 size2 = secrets.randbelow(len(connection.tree.leaves) - 1) + 1
                 size1 = secrets.randbelow(size2)
                 size1, size2 = sorted((size2, size1))
