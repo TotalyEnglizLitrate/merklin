@@ -105,6 +105,10 @@
                 </button>
             </div>
         </div>
+        
+    <!-- Button to download session logs (shown only when signed in) -->
+    <button id="get-logs-btn" style="display:none;">Download Session Logs</button>
+
     </div>
 
     <script>
@@ -162,6 +166,83 @@
                 signOutBtn.style.display = 'none';
             }
         });
+
+        (function () {
+    const btn = document.getElementById('get-logs-btn');
+
+    function showButton() { btn.style.display = ''; }
+    function hideButton() { btn.style.display = 'none'; }
+
+    async function getIdTokenFromFirebase(user, forceRefresh = false) {
+      try {
+        return await user.getIdToken(forceRefresh);
+      } catch {
+        return localStorage.getItem('idToken') || null;
+      }
+    }
+
+    // Prefer Firebase auth state if available, otherwise fall back to stored token
+    if (window.firebase && firebase.auth) {
+      firebase.auth().onAuthStateChanged(async (user) => {
+        if (user) {
+          const token = await getIdTokenFromFirebase(user);
+          if (token) localStorage.setItem('idToken', token);
+          showButton();
+        } else {
+          localStorage.removeItem('idToken');
+          hideButton();
+        }
+      });
+    } else {
+      // fallback: show only if an idToken exists in localStorage
+      if (localStorage.getItem('idToken')) showButton();
+      else hideButton();
+    }
+
+    btn.addEventListener('click', async () => {
+      const sessionId = prompt('Enter log session id:');
+      if (!sessionId) return;
+      if (!/^\d+$/.test(sessionId.trim())) {
+        alert('Session id must be a number');
+        return;
+      }
+
+      // try to refresh token via firebase if possible
+      let token = localStorage.getItem('idToken') || '';
+      if (window.firebase && firebase.auth && firebase.auth().currentUser) {
+        token = await getIdTokenFromFirebase(firebase.auth().currentUser, true) || token;
+        if (token) localStorage.setItem('idToken', token);
+      }
+
+      if (!token) {
+        alert('Not signed in');
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/session-logs/${encodeURIComponent(sessionId)}?token=${encodeURIComponent(token)}`, {
+          method: 'GET',
+        });
+        if (!resp.ok) {
+          const txt = await resp.text().catch(()=>null);
+          alert('Failed to fetch logs: ' + (txt || resp.status));
+          return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${sessionId}_logs.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('Error fetching logs');
+        console.error(e);
+      }
+    });
+  })();
     </script>
 </body>
 </html>
