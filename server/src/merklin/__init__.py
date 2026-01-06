@@ -346,9 +346,9 @@ async def challenge_subroutine(connection: Connection):
         pass
 
 
-@app.get("/signin")
-async def signin() -> HTMLResponse:
-    html_content = (Path(__file__).parent / "signin.html").read_text()
+@app.get("/")
+async def home() -> HTMLResponse:
+    html_content = (Path(__file__).parent / "home.html").read_text()
     return HTMLResponse(content=html_content)
 
 
