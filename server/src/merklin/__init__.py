@@ -9,7 +9,7 @@ import firebase_admin.credentials as credentials
 import firebase_admin.firestore_async as firestore_async
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from firebase_admin import initialize_app
 from google.cloud.firestore_v1.async_client import AsyncClient
 
@@ -26,6 +26,7 @@ import random
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 
@@ -350,14 +351,25 @@ async def signin() -> HTMLResponse:
     html_content = (Path(__file__).parent / "signin.html").read_text()
     return HTMLResponse(content=html_content)
 
+
 @app.get("/session-logs/{session_id}")
-async def get_session_logs(session_id: int, decoded_token: dict[str, str] = Depends(verify_token)) -> list[dict[str, str | int]]:
+async def get_session_logs(
+    session_id: int, decoded_token: dict[str, str] = Depends(verify_token)
+) -> StreamingResponse:
     uid = decoded_token["uid"]
     db: AsyncClient = app.state.db
-    logs: list[dict[str, str | int]] = []
-    async for encrypted_message, log_index in get_logs_by_session(db, uid, session_id):
-        logs.append({"encrypted_message": encrypted_message, "log_index": log_index})
-    return logs
+    logs: list[str] = [
+        message async for message, _ in get_logs_by_session(db, uid, session_id)
+    ]
+
+    return StreamingResponse(
+        content=BytesIO(json.dumps(logs).encode()),
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f'attachment; filename="{session_id}_logs.json"'
+        },
+    )
+
 
 def main():
     logging.basicConfig(
