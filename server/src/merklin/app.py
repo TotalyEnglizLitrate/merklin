@@ -35,6 +35,7 @@ import secrets
 
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cred_path = os.getenv("MERKLIN_FIREBASE_CREDS")

@@ -137,7 +137,9 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
-    conn: aiosqlite.Connection = await aiosqlite.connect(platformdirs.user_data_path("arthur") / "sessions.db")
+    conn: aiosqlite.Connection = await aiosqlite.connect(
+        platformdirs.user_data_path("arthur") / "sessions.db"
+    )
     cursor = await conn.cursor()
     try:
         async with websockets.connect(complete_url) as websocket:
