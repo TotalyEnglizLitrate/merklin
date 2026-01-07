@@ -8,6 +8,7 @@ import websockets
 
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Callable, Coroutine, Self, TextIO
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -139,10 +140,12 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
-    conn: aiosqlite.Connection = await aiosqlite.connect(
-        platformdirs.user_data_path("arthur") / "sessions.db"
-    )
+    db_data_path = platformdirs.user_data_path("arthur")
+    db_data_path.mkdir(exist_ok=True, parents=True)
+
+    conn: aiosqlite.Connection = await aiosqlite.connect(db_data_path / "sessions.db")
     cursor = await conn.cursor()
+    await cursor.executescript((Path(__file__).parent / "init.sql").read_text())
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
