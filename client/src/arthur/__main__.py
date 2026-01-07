@@ -1,7 +1,9 @@
 import httpx
 
 from pathlib import Path
+
 import os
+import urllib.parse
 
 
 async def download_logs(token: str, session_id: int, path: Path):
@@ -11,15 +13,14 @@ async def download_logs(token: str, session_id: int, path: Path):
     else:
         path.mkdir(parents=True, exist_ok=True)
 
-    ws_url = os.getenv("MERKLIN_URL")
-    if ws_url is None:
+    url = os.getenv("MERKLIN_URL")
+    if url is None:
         raise RuntimeError("Merklin server endpoint not configured")
-
+    encoded_params = urllib.parse.urlencode({"token": token})
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "GET",
-            f"http://{ws_url}/session-logs/{session_id}",
-            headers={"Authorization": f"Bearer {token}"},
+            f"http://{url}/session-logs/{session_id}?{encoded_params}",
         ) as response:
             response.raise_for_status()
             filename = (
