@@ -30,3 +30,7 @@ dev = [
 
 [tool.uv.sources]
 merkle-tree = { path = "../merkle-tree" }
+
+
+[tool.uv.build-backend]
+source-include = ["src/merklin/home.html"]
