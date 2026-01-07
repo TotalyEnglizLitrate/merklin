@@ -158,7 +158,7 @@ async def send_logs(
             )
             await conn.commit()
 
-            while True:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            while True:
                 if shutdown_event.is_set() and queue.empty():
                     break
 
@@ -178,7 +178,7 @@ async def send_logs(
                     data.append(log_data)
                 enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
 
-                await cursor.execute(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+                await cursor.execute(
                     "INSERT INTO log_nonce (session_id, log_id, nonce) VALUES (?, ?, ?)",
                     (session_id, len(data) - 1, log_data.nonce),
                 )
