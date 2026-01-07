@@ -6,8 +6,8 @@ import os
 
 logger = logging.getLogger(__name__)
 
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PSWD = os.getenv("EMAIL_PASSWORD")
+EMAIL_USER = os.getenv("MERKLIN_EMAIL_USER")
+EMAIL_PSWD = os.getenv("MERKLIN_EMAIL_PASSWORD")
 
 
 def make_alert(to: str, type: str, warning: str, session: int) -> EmailMessage:
