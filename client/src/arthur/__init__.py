@@ -137,8 +137,8 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
-    conn = aiosqlite.connect(platformdirs.user_data_path("arthur") / "sessions.db")
-    cursor = conn.cursor()
+    conn: aiosqlite.Connection = await aiosqlite.connect(platformdirs.user_data_path("arthur") / "sessions.db")
+    cursor = await conn.cursor()
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
@@ -152,13 +152,13 @@ async def send_logs(
                 raise RuntimeError("Failed to obtain session ID from Merklin server")
 
             session_id: int = session_data.get("session_id")
-            await cursor.execute(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            await cursor.execute(
                 "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
                 (session_id, aes_key),
             )
             await conn.commit()
 
-            while True:
+            while True:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                 if shutdown_event.is_set() and queue.empty():
                     break
 
