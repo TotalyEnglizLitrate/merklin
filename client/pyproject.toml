@@ -11,6 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "aiosqlite>=0.22.1",
     "cryptography>=46.0.3",
+    "dotenv>=0.9.9",
     "httpx>=0.28.1",
     "merkle-tree",
     "websockets>=15.0.1",

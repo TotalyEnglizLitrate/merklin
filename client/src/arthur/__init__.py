@@ -13,6 +13,7 @@ from typing import Callable, Coroutine, Self, TextIO
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
+from dotenv import load_dotenv
 
 from merkle_tree import MerkleTree
 
@@ -75,6 +76,7 @@ class LogData:
 
 
 def hook_logs(capture: TextIO) -> TextIO:
+    load_dotenv()
     ws_url = os.getenv("MERKLIN_URL")
     if ws_url is None:
         raise RuntimeError("Merklin server endpoint not configured")

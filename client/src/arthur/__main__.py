@@ -1,4 +1,5 @@
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from dotenv import load_dotenv
 
 import httpx
 import aiosqlite
@@ -60,6 +61,7 @@ async def decrypt_logs(session_id: int, buf: StringIO, out: Path):
 
 
 def main():
+    load_dotenv()
     token = input("Enter token: ")
     session_id = int(input("Enter session id to retrieve: "))
     path = Path(input("Enter path for storing file (directory): "))
