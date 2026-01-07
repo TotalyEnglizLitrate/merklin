@@ -127,7 +127,7 @@ async def send_logs(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    base_url = f"{ws_url}/log"
+    base_url = f"ws://{ws_url}/log"
     query_params: dict[str, str] = {
         "token": os.environ["MERKLIN_TOKEN"],
         "public_key": pem.hex(),
@@ -137,7 +137,7 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
-    conn = aiosqlite.connect(platformdirs.user_data_path("arthur") + "/sessions.db")
+    conn = aiosqlite.connect(platformdirs.user_data_path("arthur") / "sessions.db")
     cursor = conn.cursor()
     try:
         async with websockets.connect(complete_url) as websocket:
@@ -147,12 +147,11 @@ async def send_logs(
                 )
             )
 
-            message = await anext(websocket)
-            data = json.loads(message)
-            if data.get("type") != "session_id":
+            session_data = json.loads(await websocket.recv())
+            if session_data.get("type") != "session_id":
                 raise RuntimeError("Failed to obtain session ID from Merklin server")
 
-            session_id = data.get("session_id")
+            session_id: int = session_data.get("session_id")
             await cursor.execute(
                 "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
                 (session_id, aes_key),
