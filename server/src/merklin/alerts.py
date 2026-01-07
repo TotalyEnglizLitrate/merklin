@@ -1,4 +1,4 @@
-from asyncio import Queue
+from asyncio import Queue, CancelledError
 import logging
 from email.message import EmailMessage
 from aiosmtplib import SMTP
@@ -6,8 +6,8 @@ import os
 
 logger = logging.getLogger(__name__)
 
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PSWD = os.getenv("EMAIL_PASSWORD")
+EMAIL_USER = os.getenv("MERKLIN_EMAIL_USER")
+EMAIL_PSWD = os.getenv("MERKLIN_EMAIL_PASSWORD")
 
 
 def make_alert(to: str, type: str, warning: str, session: int) -> EmailMessage:
@@ -68,10 +68,13 @@ async def alert(queue: Queue[EmailMessage]) -> None:
     await smtp.connect()
     await smtp.login(EMAIL_USER, EMAIL_PSWD)
 
-    while True:
+    cond = True
+    while cond:
         msg = await queue.get()
         try:
             await smtp.send_message(msg)
+        except CancelledError:
+            cond = queue.empty()
         except Exception as e:
             print("Email send failed:", e)
         finally:

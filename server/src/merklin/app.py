@@ -9,6 +9,7 @@ import firebase_admin.credentials as credentials
 import firebase_admin.firestore_async as firestore_async
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
+from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from firebase_admin import initialize_app
 from google.cloud.firestore_v1.async_client import AsyncClient
@@ -98,10 +99,21 @@ class ConnectionManager:
 
     def is_connected(self, uid: str) -> bool:
         return uid in self.active_connections
+    
+class ProofError(Exception):
+    pass
 
 
-async def verify_token(websocket: WebSocket) -> dict[str, str]:
+async def verify_token_ws(websocket: WebSocket) -> dict[str, str]:
     token = websocket.query_params.get("token")
+    return await verify_token(token)
+    
+
+async def verify_token_http(request: Request) -> dict[str, str]:
+    token = request.query_params.get("token")
+    return await verify_token(token)
+
+async def verify_token(token: str | None) -> dict[str, str]:
     if token is None:
         logger.warning("WebSocket connection attempted without token")
         raise WebSocketException(code=4401, reason="Unauthorized: Missing token")
@@ -110,13 +122,14 @@ async def verify_token(websocket: WebSocket) -> dict[str, str]:
     except Exception as e:
         logger.error(f"Token verification failed: {e}")
         raise
+    
 
 
 @app.websocket("/log")
 async def log_ws_endpoint(
     websocket: WebSocket,
     public_key: str,
-    decoded_token: dict[str, str] = Depends(verify_token),
+    decoded_token: dict[str, str] = Depends(verify_token_ws),
 ):
     await websocket.accept()
 
@@ -256,19 +269,18 @@ async def log_ws_endpoint(
                         )
 
                     if disconnect:
-                        await websocket.close()
                         logger.info(f"Disconnected user {uid} due to proof tampering")
+                        raise ProofError("Proof tampering detected")
                 else:
                     logger.error(
                         f"Invalid proof type received from user {uid}: {proof_type}"
                     )
-                    raise ValueError("Invalid proof type")
+                    raise ProofError(f"Invalid proof type: {proof_type}")
 
             else:
                 logger.warning(f"Unknown message type from user {uid}: {msg_type}")
-                await websocket.send_json(
-                    {"type": "error", "error": "Unknown message type"}
-                )
+                raise ProofError("Unknown message type")
+            
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for user {uid}")
     except WebSocketException as e:
@@ -279,6 +291,9 @@ async def log_ws_endpoint(
     except cryptography.exceptions.InvalidSignature:
         logger.warning(f"Invalid signature on log from user {uid}")
         await websocket.send_json({"type": "error", "error": "Invalid log signature"})
+    except ProofError as e:
+        logger.warning(f"Proof error for user {uid}: {e}")
+        await websocket.send_json({"type": "error", "error": f"Proof error: {e}"})
     except Exception as e:
         logger.exception(f"Unexpected error for user {uid}")
         await websocket.send_json(
@@ -359,8 +374,8 @@ async def get_session_logs(
 ) -> StreamingResponse:
     uid = decoded_token["uid"]
     db: AsyncClient = app.state.db
-    logs: list[str] = [
-        message async for message, _ in get_logs_by_session(db, uid, session_id)
+    logs: list[tuple[str, int]] = [
+        item async for item in get_logs_by_session(db, uid, session_id)
     ]
 
     return StreamingResponse(
@@ -374,7 +389,7 @@ async def get_session_logs(
 
 def main():
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info("Starting Merklin server on 0.0.0.0:8000")
