@@ -389,7 +389,7 @@ async def get_session_logs(
 
 def main():
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info("Starting Merklin server on 0.0.0.0:8000")
