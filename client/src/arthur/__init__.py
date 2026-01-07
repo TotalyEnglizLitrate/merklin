@@ -16,6 +16,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 
 from merkle_tree import MerkleTree
 
+import aiosqlite
+import platformdirs
+
 
 class HookLogs(TextIO):
     def __init__(
@@ -134,6 +137,8 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
+    conn = aiosqlite.connect(platformdirs.user_data_path("arthur") + "/sessions.db")
+    cursor = conn.cursor()
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
@@ -141,6 +146,23 @@ async def send_logs(
                     websocket, hook, data, aes_key, data_lock, challenge_lock
                 )
             )
+
+            message = await anext(websocket)
+            data = json.loads(message)
+            session_id = data.get("session_id")
+            if data.get("type") == "error":
+                description = data.get("error")
+                if description is not None:
+                    print(f"Merklin server error: {description}", file=sys.stderr)
+                else:
+                    print("Merklin server sent an unknown error", file=sys.stderr)
+
+            elif data.get("type") == "session_id":
+                await cursor.execute(
+                    "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
+                    (session_id, aes_key),
+                )
+                await conn.commit()
 
             while True:
                 if shutdown_event.is_set() and queue.empty():
@@ -161,6 +183,12 @@ async def send_logs(
                 async with data_lock:
                     data.append(log_data)
                 enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
+
+                await cursor.execute(
+                    "INSERT INTO log_nonce (session_id, log_id, nonce) VALUES (?, ?, ?)",
+                    (session_id, len(data) - 1, log_data.nonce),
+                )
+                await conn.commit()
 
                 signature = private_key.sign(
                     enc_log,

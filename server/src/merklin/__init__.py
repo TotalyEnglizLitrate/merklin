@@ -131,6 +131,7 @@ async def log_ws_endpoint(
         websocket.app.state.session_alert_email_queue
     )
     logger.info(f"Starting session {session} for user {uid}")
+    websocket.send_json({"type": "session_id", "session_id": session})
 
     await session_alert_email_queue.put(make_session_alert(client_email, session))
     logger.info(f"Session alert email sent for user {uid}, session {session}")
