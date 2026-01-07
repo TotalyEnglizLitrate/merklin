@@ -74,13 +74,16 @@ async def get_session(db: AsyncClient, uid: str) -> int:
         .limit(1)
     )
     try:
-        result = (await anext(query.stream())).to_dict()
+        query_res = await anext(query.stream())
+        result = query_res.to_dict()
         if result is None:
             ret = 1
         else:
             ret = result["last_session"] + 1
         logger.debug(f"Session retrieved for user {uid}")
         logger.debug(f"Current session for user {uid} is {ret}")
+        
+        await db.collection("logs").document(query_res.id).delete() # pyright: ignore[reportUnknownMemberType]
     except StopAsyncIteration as e:
         ret = 1
         logger.debug(f"No session found for user {uid}, defaulting to 1")
@@ -96,7 +99,6 @@ async def get_session(db: AsyncClient, uid: str) -> int:
             "is_session": True,
             "last_session": ret,
         },
-        merge=ret != 1,
     )
 
     return ret
