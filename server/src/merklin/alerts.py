@@ -3,9 +3,6 @@ import logging
 from email.message import EmailMessage
 from aiosmtplib import SMTP
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 

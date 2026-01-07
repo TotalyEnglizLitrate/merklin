@@ -13,6 +13,7 @@ from typing import Callable, Coroutine, Self, TextIO
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
+from dotenv import load_dotenv
 
 from merkle_tree import MerkleTree
 
@@ -75,6 +76,7 @@ class LogData:
 
 
 def hook_logs(capture: TextIO) -> TextIO:
+    load_dotenv()
     ws_url = os.getenv("MERKLIN_URL")
     if ws_url is None:
         raise RuntimeError("Merklin server endpoint not configured")
@@ -127,7 +129,7 @@ async def send_logs(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    base_url = f"{ws_url}/log"
+    base_url = f"ws://{ws_url}/log"
     query_params: dict[str, str] = {
         "token": os.environ["MERKLIN_TOKEN"],
         "public_key": pem.hex(),
@@ -137,8 +139,10 @@ async def send_logs(
 
     listener: asyncio.Task[None] | None = None
 
-    conn = aiosqlite.connect(platformdirs.user_data_path("arthur") + "/sessions.db")
-    cursor = conn.cursor()
+    conn: aiosqlite.Connection = await aiosqlite.connect(
+        platformdirs.user_data_path("arthur") / "sessions.db"
+    )
+    cursor = await conn.cursor()
     try:
         async with websockets.connect(complete_url) as websocket:
             listener = asyncio.create_task(
@@ -147,12 +151,11 @@ async def send_logs(
                 )
             )
 
-            message = await anext(websocket)
-            data = json.loads(message)
-            if data.get("type") != "session_id":
+            session_data = json.loads(await websocket.recv())
+            if session_data.get("type") != "session_id":
                 raise RuntimeError("Failed to obtain session ID from Merklin server")
 
-            session_id = data.get("session_id")
+            session_id: int = session_data.get("session_id")
             await cursor.execute(
                 "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
                 (session_id, aes_key),
