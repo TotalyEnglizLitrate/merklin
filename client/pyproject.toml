@@ -26,3 +26,6 @@ dev = [
 
 [tool.uv.sources]
 merkle-tree = { path = "../merkle-tree" }
+
+[tool.uv.build-backend]
+source-include = ["src/arthur/init.sql"]
