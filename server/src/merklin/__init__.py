@@ -9,13 +9,13 @@ import firebase_admin.credentials as credentials
 import firebase_admin.firestore_async as firestore_async
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from firebase_admin import initialize_app
 from google.cloud.firestore_v1.async_client import AsyncClient
 
 
 from merkle_tree import MerkleTree
-from .firestore_services import add_log, get_session
+from .firestore_services import add_log, get_session, get_logs_by_session
 from .alerts import alert, make_alert, make_session_alert
 
 import asyncio
@@ -26,6 +26,7 @@ import random
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 
@@ -130,6 +131,7 @@ async def log_ws_endpoint(
         websocket.app.state.session_alert_email_queue
     )
     logger.info(f"Starting session {session} for user {uid}")
+    websocket.send_json({"type": "session_id", "session_id": session})
 
     await session_alert_email_queue.put(make_session_alert(client_email, session))
     logger.info(f"Session alert email sent for user {uid}, session {session}")
@@ -345,10 +347,29 @@ async def challenge_subroutine(connection: Connection):
         pass
 
 
-@app.get("/signin")
-async def signin() -> HTMLResponse:
-    html_content = (Path(__file__).parent / "signin.html").read_text()
+@app.get("/")
+async def home() -> HTMLResponse:
+    html_content = (Path(__file__).parent / "home.html").read_text()
     return HTMLResponse(content=html_content)
+
+
+@app.get("/session-logs/{session_id}")
+async def get_session_logs(
+    session_id: int, decoded_token: dict[str, str] = Depends(verify_token)
+) -> StreamingResponse:
+    uid = decoded_token["uid"]
+    db: AsyncClient = app.state.db
+    logs: list[str] = [
+        message async for message, _ in get_logs_by_session(db, uid, session_id)
+    ]
+
+    return StreamingResponse(
+        content=BytesIO(json.dumps(logs).encode()),
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f'attachment; filename="{session_id}_logs.json"'
+        },
+    )
 
 
 def main():

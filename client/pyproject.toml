@@ -9,6 +9,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "cryptography>=46.0.3",
     "httpx>=0.28.1",
     "merkle-tree",
@@ -26,3 +27,6 @@ dev = [
 
 [tool.uv.sources]
 merkle-tree = { path = "../merkle-tree" }
+
+[tool.uv.build-backend]
+source-include = ["src/arthur/init.sql"]

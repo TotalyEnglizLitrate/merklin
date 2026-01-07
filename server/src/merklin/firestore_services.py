@@ -1,5 +1,8 @@
-import logging
 from google.cloud.firestore_v1.async_client import AsyncClient
+
+import logging
+
+from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ async def add_log(
 
 async def get_log_by_index(
     db: AsyncClient, uid: str, log_index: int, session: int
-) -> dict[str, str | int | bytes] | None:
+) -> dict[str, str | int] | None:
     query = (
         db.collection("logs")
         .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
@@ -44,6 +47,23 @@ async def get_log_by_index(
     except Exception as e:
         logger.error(f"Failed to retrieve log for user {uid} at index {log_index}: {e}")
         raise
+
+
+async def get_logs_by_session(
+    db: AsyncClient, uid: str, session: int
+) -> AsyncGenerator[tuple[str, int], None]:
+    query = (
+        db.collection("logs")
+        .where("uid", "==", uid)  # pyright: ignore[reportUnknownMemberType]
+        .where("session", "==", session)
+    )
+
+    async for doc in query.stream():
+        doc_dict = doc.to_dict()
+        if doc_dict is not None:
+            yield (doc_dict["encrypted_message"], doc_dict["log_index"])
+        else:
+            raise RuntimeError("Log document is None - this should not happen")
 
 
 async def get_session(db: AsyncClient, uid: str) -> int:
