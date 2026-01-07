@@ -62,7 +62,10 @@ async def decrypt_logs(session_id: int, buf: StringIO, out: Path):
 
 def main():
     load_dotenv()
-    token = input("Enter token: ")
+    token = os.getenv("MERKLIN_TOKEN")
+    if token is None:
+        raise RuntimeError("Token env var not set")
+    
     session_id = int(input("Enter session id to retrieve: "))
     path = Path(input("Enter path for storing file (directory): "))
     decrypt = input("Do you want to decrypt the logs? [Y/n]").strip().lower()
