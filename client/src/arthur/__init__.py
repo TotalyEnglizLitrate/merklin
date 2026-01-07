@@ -152,7 +152,7 @@ async def send_logs(
                 raise RuntimeError("Failed to obtain session ID from Merklin server")
 
             session_id: int = session_data.get("session_id")
-            await cursor.execute(
+            await cursor.execute(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                 "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
                 (session_id, aes_key),
             )
@@ -178,7 +178,7 @@ async def send_logs(
                     data.append(log_data)
                 enc_log = encrypt(aes_key, log_data.nonce, log_entry.encode())
 
-                await cursor.execute(
+                await cursor.execute(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                     "INSERT INTO log_nonce (session_id, log_id, nonce) VALUES (?, ?, ?)",
                     (session_id, len(data) - 1, log_data.nonce),
                 )
