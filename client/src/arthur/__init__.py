@@ -149,20 +149,15 @@ async def send_logs(
 
             message = await anext(websocket)
             data = json.loads(message)
-            session_id = data.get("session_id")
-            if data.get("type") == "error":
-                description = data.get("error")
-                if description is not None:
-                    print(f"Merklin server error: {description}", file=sys.stderr)
-                else:
-                    print("Merklin server sent an unknown error", file=sys.stderr)
+            if data.get("type") != "session_id":
+                raise RuntimeError("Failed to obtain session ID from Merklin server")
 
-            elif data.get("type") == "session_id":
-                await cursor.execute(
-                    "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
-                    (session_id, aes_key),
-                )
-                await conn.commit()
+            session_id = data.get("session_id")
+            await cursor.execute(
+                "INSERT INTO session_key (session_id, aes_key) VALUES (?, ?)",
+                (session_id, aes_key),
+            )
+            await conn.commit()
 
             while True:
                 if shutdown_event.is_set() and queue.empty():
