@@ -374,8 +374,8 @@ async def get_session_logs(
 ) -> StreamingResponse:
     uid = decoded_token["uid"]
     db: AsyncClient = app.state.db
-    logs: list[str] = [
-        message async for message, _ in get_logs_by_session(db, uid, session_id)
+    logs: list[tuple[str, int]] = [
+        item async for item in get_logs_by_session(db, uid, session_id)
     ]
 
     return StreamingResponse(

@@ -56,18 +56,23 @@ async def decrypt_logs(session_id: int, buf: StringIO, out: Path):
     aes_key: bytes = key_row[0]
     aes = AESGCM(aes_key)
 
-    enc_logs = [bytes.fromhex(x) for x in json.load(buf)]
-    nonces_result = await cursor.execute(
-        "SELECT NONCE FROM LOG_NONCE WHERE SESSION_ID = ? ORDER BY LOG_ID ASC;",
-        (session_id,),
-    )
-    nonces = [row[0] for row in await nonces_result.fetchall()]
-    out.write_text(
-        "".join(
-            aes.decrypt(nonce, log, None).decode()
-            for nonce, log in zip(nonces, enc_logs, strict=True)
+    data = json.load(buf)
+    enc_logs = [bytes.fromhex(x) for x, _ in data]
+    log_ids = [y for _, y in data]
+
+    output = ""
+    for log, log_id in zip(enc_logs, log_ids, strict=True):
+        nonce_result = await cursor.execute(
+            "SELECT NONCE FROM LOG_NONCE WHERE SESSION_ID = ? AND LOG_ID = ?;",
+            (session_id, log_id),
         )
-    )
+        nonce_row = await nonce_result.fetchone()
+        if nonce_row is None:
+            raise RuntimeError("Missing nonce for log")
+        nonce: bytes = nonce_row[0]
+        output += aes.decrypt(nonce, log, None).decode()
+
+    out.write_text(output)
 
 
 def main():

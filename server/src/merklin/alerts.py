@@ -1,4 +1,4 @@
-from asyncio import Queue
+from asyncio import Queue, CancelledError
 import logging
 from email.message import EmailMessage
 from aiosmtplib import SMTP
@@ -68,10 +68,13 @@ async def alert(queue: Queue[EmailMessage]) -> None:
     await smtp.connect()
     await smtp.login(EMAIL_USER, EMAIL_PSWD)
 
-    while True:
+    cond = True
+    while cond:
         msg = await queue.get()
         try:
             await smtp.send_message(msg)
+        except CancelledError:
+            cond = queue.empty()
         except Exception as e:
             print("Email send failed:", e)
         finally:
