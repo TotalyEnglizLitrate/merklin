@@ -56,7 +56,7 @@ async def decrypt_logs(session_id: int, buf: StringIO, out: Path):
     enc_logs = [bytes.fromhex(x) for x in json.load(buf)]
     nonces_result = await cursor.execute("SELECT NONCE FROM LOG_NONCE WHERE SESSION_ID = ? ORDER BY LOG_ID ASC;", (session_id,))
     nonces = [row[0] for row in await nonces_result.fetchall()]
-    out.write_text("".join(aes.decrypt(nonce, log, None).decode() for nonce, log in zip(nonces, enc_logs)))
+    out.write_text("".join(aes.decrypt(nonce, log, None).decode() for nonce, log in zip(nonces, enc_logs, strict=True)))
 
 
 def main():
